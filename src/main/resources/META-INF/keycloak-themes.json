@@ -1,0 +1,8 @@
+{
+  "themes": [
+    {
+      "name": "client-webhook-admin",
+      "types": ["admin"]
+    }
+  ]
+}
