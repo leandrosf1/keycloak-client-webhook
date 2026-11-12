@@ -1,0 +1,24 @@
+name: Maven verification
+
+on:
+  push:
+    branches:
+      - feature/jwt-webhook-security
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Compile and run tests
+        run: mvn -B --no-transfer-progress clean verify
