@@ -2,6 +2,7 @@ package com.leandrosf.keycloak.clientwebhook.runtime;
 
 import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookConfig;
 import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookConfigRepository;
+import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookTransportPolicy;
 import com.leandrosf.keycloak.clientwebhook.config.WebhookEventType;
 import com.leandrosf.keycloak.clientwebhook.model.ClientWebhookPayload;
 import org.jboss.logging.Logger;
@@ -283,9 +284,8 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
         List<SignedPendingWebhook> signed = new ArrayList<>();
         for (PendingWebhook item : pending) {
             try {
-                if (item.config().url() == null
-                        || !"https".equalsIgnoreCase(item.config().url().getScheme())) {
-                    LOG.errorf("Webhook nao enviado: HTTPS obrigatorio. client=%s eventId=%s",
+                if (!ClientWebhookTransportPolicy.isAllowedEndpoint(item.config().url())) {
+                    LOG.errorf("Webhook nao enviado: URL nao permitida pela politica de transporte. client=%s eventId=%s",
                             item.payload().client().clientId(), item.payload().eventId());
                     continue;
                 }
