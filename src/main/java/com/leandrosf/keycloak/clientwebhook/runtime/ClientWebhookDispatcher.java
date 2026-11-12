@@ -10,6 +10,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Map;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -18,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class ClientWebhookDispatcher implements AutoCloseable {
 
     private static final Logger LOG = Logger.getLogger(ClientWebhookDispatcher.class);
-    private static final String USER_AGENT = "Keycloak-Client-Webhook/1.1.1";
+    private static final String USER_AGENT = "Keycloak-Client-Webhook/1.2.0-dev";
 
     private final ExecutorService executor;
     private final HttpClient httpClient;
@@ -31,14 +33,22 @@ public final class ClientWebhookDispatcher implements AutoCloseable {
                 .build();
     }
 
-    public void dispatchAsync(ClientWebhookConfig config, ClientWebhookPayload payload) {
-        executor.submit(() -> send(config, payload));
+    public void dispatchAsync(ClientWebhookConfig config, ClientWebhookPayload payload, String signedJwt) {
+        if (config.url() == null || !"https".equalsIgnoreCase(config.url().getScheme())) {
+            LOG.errorf("Webhook nao enviado: HTTPS obrigatorio. eventId=%s", payload.eventId());
+            return;
+        }
+        if (signedJwt == null || signedJwt.isBlank()) {
+            LOG.errorf("Webhook nao enviado: JWT ausente. eventId=%s", payload.eventId());
+            return;
+        }
+        executor.submit(() -> send(config, payload, signedJwt));
     }
 
-    private void send(ClientWebhookConfig config, ClientWebhookPayload payload) {
+    private void send(ClientWebhookConfig config, ClientWebhookPayload payload, String signedJwt) {
         final String body;
         try {
-            body = JsonSerialization.writeValueAsString(payload);
+            body = JsonSerialization.writeValueAsString(Map.of("webhook_token", signedJwt));
         } catch (IOException e) {
             LOG.errorf(e,
                     "Nao foi possivel serializar webhook. eventType=%s realm=%s client=%s eventId=%s",
@@ -56,7 +66,7 @@ public final class ClientWebhookDispatcher implements AutoCloseable {
                         .header("X-Webhook-Event-Id", payload.eventId())
                         .header("X-Keycloak-Event-Type", payload.eventType())
                         .header("X-Keycloak-Realm", payload.realm())
-                        .POST(HttpRequest.BodyPublishers.ofString(body))
+                        .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                         .build();
 
                 HttpResponse<Void> response = httpClient.send(
