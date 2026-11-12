@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.keycloak.crypto.SignatureException;
 import org.keycloak.crypto.SignatureSignerContext;
 import org.keycloak.jose.jws.JWSBuilder;
+import org.keycloak.util.JsonSerialization;
+import java.util.Map;
 
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
@@ -50,11 +52,13 @@ class WebhookJwsContractTest {
         assertEquals(3, parts.length);
         String header = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
         String body = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-        assertTrue(header.contains("\"alg\":\"RS256\""));
-        assertTrue(header.contains("\"kid\":\"test-kid\""));
-        assertTrue(header.contains("\"typ\":\"webhook+jwt\""));
-        assertTrue(body.contains("\"token_use\":\"client_webhook\""));
-        assertTrue(body.contains("\"username\":\"12345678901\""));
+        Map<?, ?> headerJson = JsonSerialization.readValue(header, Map.class);
+        Map<?, ?> payloadJson = JsonSerialization.readValue(body, Map.class);
+        assertEquals("RS256", headerJson.get("alg"));
+        assertEquals("test-kid", headerJson.get("kid"));
+        assertEquals("webhook+jwt", headerJson.get("typ"));
+        assertEquals("client_webhook", payloadJson.get("token_use"));
+        assertEquals("12345678901", ((Map<?, ?>) payloadJson.get("user")).get("username"));
 
         Signature verifier = Signature.getInstance("SHA256withRSA");
         verifier.initVerify(pair.getPublic());
