@@ -58,9 +58,7 @@ public final class WebhookJwtClaims {
         if (event.role() != null) {
             claims.put("role", event.role());
         }
-        if (event.context() != null) {
-            claims.put("context", event.context());
-        }
+        // Omit IP and OIDC session identifiers from signed webhook claims.
         return Map.copyOf(claims);
     }
 
