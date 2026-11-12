@@ -46,7 +46,7 @@ The signed claims include:
 }
 ```
 
-Optional values such as user email/name or event context may also be present. The **JWT is signed, not encrypted**; do not put credentials or other secrets into claims. `sub` is the Keycloak user ID and `user.username` is the username snapshot; if the deployment uses CPF as username, the receiver can use it **only after signature validation**.
+Optional user profile values such as email/name may also be present. The OIDC session ID and request IP are deliberately omitted. The **JWT is signed, not encrypted**; do not put credentials or other secrets into claims. `sub` is the Keycloak user ID and `user.username` is the username snapshot; if the deployment uses CPF as username, the receiver can use it **only after signature validation**.
 
 An event is assigned one `jti` per **destination**. The provider creates and signs a single JWT before queueing it; all retries within that delivery reuse the same signed token and `jti`. Tokens have a 300-second lifetime. If delivery is delayed beyond expiry, the receiver must reject it; this version does not persist or renew deliveries.
 
