@@ -49,6 +49,7 @@ public final class WebhookJwtSigner {
 
             return new JWSBuilder()
                     .type(TOKEN_TYPE)
+                    .kid(signer.getKid())
                     .jsonContent(WebhookJwtClaims.create(
                             event, issuer, Instant.now().getEpochSecond()))
                     .sign(signer);
