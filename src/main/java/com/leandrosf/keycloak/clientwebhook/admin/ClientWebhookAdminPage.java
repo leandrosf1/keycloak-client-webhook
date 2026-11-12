@@ -1,6 +1,7 @@
 package com.leandrosf.keycloak.clientwebhook.admin;
 
 import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookConfigKeys;
+import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookTransportPolicy;
 import com.leandrosf.keycloak.clientwebhook.config.WebhookEventType;
 import org.keycloak.Config;
 import org.keycloak.component.ComponentModel;
@@ -76,7 +77,7 @@ public final class ClientWebhookAdminPage implements UiPageProvider, UiPageProvi
                 .property()
                     .name(ClientWebhookConfigKeys.URL)
                     .label("URI do webhook")
-                    .helpText("Endpoint HTTPS do sistema integrado que recebera um webhook_token (JWT assinado).")
+                    .helpText("Endpoint que recebera um webhook_token JWT assinado. HTTPS obrigatorio, exceto em start-dev ou com allow-http=true no keycloak.conf.")
                     .type(ProviderConfigProperty.STRING_TYPE)
                     .required(true)
                     .add()
@@ -200,12 +201,14 @@ public final class ClientWebhookAdminPage implements UiPageProvider, UiPageProvi
         try {
             URI uri = new URI(rawUrl);
             String scheme = uri.getScheme();
-            if (!"https".equalsIgnoreCase(scheme) || uri.getHost() == null
-                    || uri.getRawFragment() != null) {
-                throw new ComponentValidationException("A URI deve ser HTTPS, possuir host valido e nao conter fragmento.");
-            }
-            if (uri.getUserInfo() != null) {
+            if (uri.getRawUserInfo() != null) {
                 throw new ComponentValidationException("Nao informe usuario/senha diretamente na URI do webhook.");
+            }
+            if (!ClientWebhookTransportPolicy.isAllowedEndpoint(uri)) {
+                throw new ComponentValidationException(
+                        "URI invalida. HTTPS e obrigatorio, salvo no modo start-dev "
+                        + "ou com liberacao explicita de HTTP no keycloak.conf. "
+                        + "A URI deve possuir host e nao conter fragmento.");
             }
         } catch (URISyntaxException e) {
             throw new ComponentValidationException("URI do webhook invalida.", e);
