@@ -76,7 +76,7 @@ public final class ClientWebhookAdminPage implements UiPageProvider, UiPageProvi
                 .property()
                     .name(ClientWebhookConfigKeys.URL)
                     .label("URI do webhook")
-                    .helpText("Endpoint HTTP/HTTPS do sistema integrado que recebera o JSON do evento.")
+                    .helpText("Endpoint HTTPS do sistema integrado que recebera um webhook_token (JWT assinado).")
                     .type(ProviderConfigProperty.STRING_TYPE)
                     .required(true)
                     .add()
@@ -200,10 +200,9 @@ public final class ClientWebhookAdminPage implements UiPageProvider, UiPageProvi
         try {
             URI uri = new URI(rawUrl);
             String scheme = uri.getScheme();
-            if (scheme == null
-                    || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
-                    || uri.getHost() == null) {
-                throw new ComponentValidationException("A URI deve ser HTTP ou HTTPS e possuir host valido.");
+            if (!"https".equalsIgnoreCase(scheme) || uri.getHost() == null
+                    || uri.getRawFragment() != null) {
+                throw new ComponentValidationException("A URI deve ser HTTPS, possuir host valido e nao conter fragmento.");
             }
             if (uri.getUserInfo() != null) {
                 throw new ComponentValidationException("Nao informe usuario/senha diretamente na URI do webhook.");
