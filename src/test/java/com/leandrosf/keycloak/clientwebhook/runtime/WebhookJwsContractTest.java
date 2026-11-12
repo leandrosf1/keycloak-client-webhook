@@ -42,6 +42,7 @@ class WebhookJwsContractTest {
                 new ClientWebhookPayload.RoleInfo("role-uuid", "role_java_esegtrab"), null);
 
         String jwt = new JWSBuilder().type(WebhookJwtSigner.TOKEN_TYPE)
+                .kid(signer.getKid())
                 .jsonContent(WebhookJwtClaims.create(payload,
                         "https://sso.example.org/realms/portal-acesso", 1800000000L))
                 .sign(signer);
