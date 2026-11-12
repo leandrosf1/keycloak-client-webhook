@@ -29,6 +29,7 @@ public final class WebhookJwtClaims {
         require(event.realm(), "realm");
         require(event.client().clientId(), "clientId");
         require(event.user().id(), "userId");
+        require(event.user().username(), "username");
         if (("ROLE_REVOKED".equals(event.eventType())
                 || "ROLE_GRANTED".equals(event.eventType()))
                 && (event.role() == null || event.role().name() == null
