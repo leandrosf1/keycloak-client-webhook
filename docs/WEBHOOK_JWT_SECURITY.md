@@ -67,11 +67,33 @@ Never accept a separately supplied CPF, username, user ID, role name or event ty
 ## Deployment and caveats
 
 - Use a **canonical frontend hostname/issuer** for the realm, and confirm its RS256 key is active and exposed in JWKS. No webhook-specific HMAC secret is required.
-- Install one provider JAR at a time, enable `declarative-ui`, and configure only HTTPS destinations in **Clients Webhook**.
+
+### Local Java debugging without an HTTPS proxy
+
+In the supported Keycloak **`start-dev`** profile, the provider permits outgoing `http://` webhook endpoints so the developer can debug a locally running JBoss/Eclipse receiver. With normal **`start`**, outgoing HTTP is **blocked by default**. To explicitly opt in for a controlled non-production environment, set the following **provider-specific** option in `conf/keycloak.conf`:
+
+```properties
+spi-events-listener--client-webhook-runtime--allow-http=true
+```
+
+Then restart Keycloak. To restore secure default behavior, remove that line or change it to `false` and start in production mode (`start`). The option is **only for outgoing client webhook requests**; it is unrelated to Keycloak's own inbound `http-enabled` option.
+
+| Server mode | allow-http | HTTPS webhook | HTTP webhook |
+| --- | --- | --- | --- |
+| `start-dev` | absent / false | allowed | allowed |
+| `start-dev` | true | allowed | allowed |
+| `start` | absent / false | allowed | **blocked** |
+| `start` | true | allowed | allowed (explicit override) |
+
+The signed JWT, signature validation, audience, `jti`, expiration and post-commit behavior are mandatory for HTTP too. HTTP exposes event metadata and the signed token to intermediaries, so use it **only on a trusted and restricted development network**, never over the public internet. Use outbound firewall rules to prevent requests to unexpected endpoints.
+
+**Important:** `localhost` in the webhook URL resolves on the **Keycloak host**. If JBoss is on the developer's PC, use a network-reachable PC address or hostname; JBoss must bind to that interface and the host firewall must permit only the necessary inbound access from the Keycloak development server. A signed JWT does not solve network routing or firewalls.
+
+- Install one provider JAR at a time, enable `declarative-ui`, and configure HTTPS destinations in **Clients Webhook** by default (the narrowly scoped development exception is documented above).
 - Roll out receiver JWT validation **before** switching the sender; otherwise existing receivers will fail to recognize the new body.
 - The current queue/retries are **in memory**, not a transactional outbox. A Keycloak crash after commit can lose an event. State reconciliation/transactional outbox is a future improvement.
 - The 5-minute JWT lifetime is bounded; a 5-attempt configuration at 60-second timeout can outlive the token. Review receiver behavior and retry limits for each deployment.
-- Destination validation currently enforces HTTPS, a valid host, no user info and no URL fragment. **This is not full SSRF prevention**: production should impose outbound network rules and allowed destination domains/addresses.
+- Destination validation enforces HTTPS by default (or HTTP under the explicit development policy), a valid host, no user info and no URL fragment. **This is not full SSRF prevention**: production should impose outbound network rules and allowed destination domains/addresses.
 - Signed tokens authenticate the event but do not guarantee correct event ordering. Receivers must handle stale revocations, retries, and newly granted access.
 - Current Java files are built against **Keycloak 26.7.4** (including internal SPI). A full Keycloak integration test with the target distribution is required before release.
 
