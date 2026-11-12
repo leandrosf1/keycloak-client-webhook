@@ -61,6 +61,12 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
         this.providerEventListener = this::onProviderEvent;
         factory.register(providerEventListener);
         LOG.info("Client Webhook inicializado");
+        if (ClientWebhookTransportPolicy.isHttpAllowed()) {
+            LOG.warn("Client Webhook: envio HTTP sem TLS PERMITIDO pelo perfil start-dev "
+                    + "ou pela opcao allow-http=true. Restrinja os destinos e a rede de homologacao.");
+        } else {
+            LOG.info("Client Webhook: apenas destinos HTTPS estao autorizados.");
+        }
     }
 
     @Override
