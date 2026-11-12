@@ -46,6 +46,15 @@ class WebhookJwtClaimsTest {
                 () -> WebhookJwtClaims.create(payload("evt", "ROLE_REVOKED"), "", NOW));
         assertThrows(IllegalArgumentException.class,
                 () -> WebhookJwtClaims.create(payload("", "ROLE_REVOKED"), "https://issuer", NOW));
+        ClientWebhookPayload originalNoUsername = payload("evt", "LOGIN");
+        ClientWebhookPayload missingUsername = new ClientWebhookPayload(
+                originalNoUsername.eventId(), originalNoUsername.eventType(),
+                originalNoUsername.occurredAt(), originalNoUsername.source(),
+                originalNoUsername.realm(), originalNoUsername.client(),
+                new ClientWebhookPayload.UserInfo("user-uuid", null, null, null, null),
+                null, null);
+        assertThrows(IllegalArgumentException.class,
+                () -> WebhookJwtClaims.create(missingUsername, "https://issuer", NOW));
         ClientWebhookPayload original = payload("evt", "LOGIN");
         ClientWebhookPayload malformed = new ClientWebhookPayload(
                 original.eventId(), "ROLE_REVOKED", original.occurredAt(),
