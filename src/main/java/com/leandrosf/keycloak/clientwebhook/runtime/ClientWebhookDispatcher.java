@@ -1,6 +1,7 @@
 package com.leandrosf.keycloak.clientwebhook.runtime;
 
 import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookConfig;
+import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookTransportPolicy;
 import com.leandrosf.keycloak.clientwebhook.model.ClientWebhookPayload;
 import org.jboss.logging.Logger;
 import org.keycloak.util.JsonSerialization;
@@ -34,8 +35,8 @@ public final class ClientWebhookDispatcher implements AutoCloseable {
     }
 
     public void dispatchAsync(ClientWebhookConfig config, ClientWebhookPayload payload, String signedJwt) {
-        if (config.url() == null || !"https".equalsIgnoreCase(config.url().getScheme())) {
-            LOG.errorf("Webhook nao enviado: HTTPS obrigatorio. eventId=%s", payload.eventId());
+        if (!ClientWebhookTransportPolicy.isAllowedEndpoint(config.url())) {
+            LOG.errorf("Webhook nao enviado: URL nao permitida pela politica de transporte. eventId=%s", payload.eventId());
             return;
         }
         if (signedJwt == null || signedJwt.isBlank()) {
