@@ -40,7 +40,7 @@ class WebhookJwsContractTest {
         ClientWebhookPayload payload = new ClientWebhookPayload(
                 "event-uuid", "ROLE_REVOKED", "2026-11-12T12:00:00Z", "PROVIDER_EVENT",
                 "portal-acesso", new ClientWebhookPayload.ClientInfo("client-uuid", "java_esegtrab"),
-                new ClientWebhookPayload.UserInfo("user-uuid", "12345678901", null, null, null),
+                new ClientWebhookPayload.UserInfo("user-uuid", "12345678901", "private@example.test", "SENSITIVE_FIRST_NAME", "SENSITIVE_LAST_NAME"),
                 new ClientWebhookPayload.RoleInfo("role-uuid", "role_java_esegtrab"), null);
 
         String jwt = new JWSBuilder().type(WebhookJwtSigner.TOKEN_TYPE)
@@ -59,6 +59,15 @@ class WebhookJwsContractTest {
         assertEquals("webhook+jwt", headerJson.get("typ"));
         assertEquals("client_webhook", payloadJson.get("token_use"));
         assertEquals("12345678901", ((Map<?, ?>) payloadJson.get("user")).get("username"));
+        Map<?, ?> userJson = (Map<?, ?>) payloadJson.get("user");
+        assertEquals(2, userJson.size());
+        assertEquals("user-uuid", userJson.get("id"));
+        assertFalse(userJson.containsKey("email"));
+        assertFalse(userJson.containsKey("firstName"));
+        assertFalse(userJson.containsKey("lastName"));
+        assertFalse(body.contains("private@example.test"));
+        assertFalse(body.contains("SENSITIVE_FIRST_NAME"));
+        assertFalse(body.contains("SENSITIVE_LAST_NAME"));
 
         Signature verifier = Signature.getInstance("SHA256withRSA");
         verifier.initVerify(pair.getPublic());
