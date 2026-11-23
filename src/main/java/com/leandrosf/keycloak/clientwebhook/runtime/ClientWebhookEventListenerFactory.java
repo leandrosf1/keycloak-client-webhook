@@ -2,6 +2,7 @@ package com.leandrosf.keycloak.clientwebhook.runtime;
 
 import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookConfig;
 import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookConfigRepository;
+import com.leandrosf.keycloak.clientwebhook.config.ClientWebhookTransportPolicy;
 import com.leandrosf.keycloak.clientwebhook.config.WebhookEventType;
 import com.leandrosf.keycloak.clientwebhook.model.ClientWebhookPayload;
 import org.jboss.logging.Logger;
@@ -60,6 +61,12 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
         this.providerEventListener = this::onProviderEvent;
         factory.register(providerEventListener);
         LOG.info("Client Webhook inicializado");
+        if (ClientWebhookTransportPolicy.isHttpAllowed()) {
+            LOG.warn("Client Webhook: envio HTTP sem TLS PERMITIDO pelo perfil start-dev "
+                    + "ou pela opcao allow-http=true. Restrinja os destinos e a rede de homologacao.");
+        } else {
+            LOG.info("Client Webhook: apenas destinos HTTPS estao autorizados.");
+        }
     }
 
     @Override
@@ -157,7 +164,7 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
                 new ClientWebhookPayload.RoleInfo(role.getId(), role.getName()),
                 null);
 
-        enqueueAfterCommit(session, List.of(new PendingWebhook(config, payload)));
+        enqueueAfterCommit(session, realm, List.of(new PendingWebhook(config, payload)));
     }
 
     private void handleUserRemoved(UserModel.UserPreRemovedEvent event) {
@@ -199,7 +206,7 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
             pending.add(new PendingWebhook(config, payload));
         }
 
-        enqueueAfterCommit(session, pending);
+        enqueueAfterCommit(session, realm, pending);
     }
 
     private void handleUserEvent(KeycloakSession session, Event event) {
@@ -264,7 +271,7 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
                             event.getIpAddress(),
                             event.getSessionId()));
 
-            enqueueAfterCommit(session, List.of(new PendingWebhook(config, payload)));
+            enqueueAfterCommit(session, realm, List.of(new PendingWebhook(config, payload)));
 
         } catch (RuntimeException e) {
             LOG.errorf(e,
@@ -273,17 +280,41 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
         }
     }
 
-    private void enqueueAfterCommit(KeycloakSession session, List<PendingWebhook> pending) {
-        if (session == null || pending == null || pending.isEmpty()) {
+    private void enqueueAfterCommit(KeycloakSession session, RealmModel realm, List<PendingWebhook> pending) {
+        if (session == null || realm == null || pending == null || pending.isEmpty()) {
+            return;
+        }
+
+        // Sign while the request/realm context is still available. Post-commit
+        // callbacks and worker threads must never use KeycloakSession or UserModel.
+        List<SignedPendingWebhook> signed = new ArrayList<>();
+        for (PendingWebhook item : pending) {
+            try {
+                if (!ClientWebhookTransportPolicy.isAllowedEndpoint(item.config().url())) {
+                    LOG.errorf("Webhook nao enviado: URL nao permitida pela politica de transporte. client=%s eventId=%s",
+                            item.payload().client().clientId(), item.payload().eventId());
+                    continue;
+                }
+                String jwt = WebhookJwtSigner.sign(session, realm, item.payload());
+                signed.add(new SignedPendingWebhook(item.config(), item.payload(), jwt));
+            } catch (RuntimeException ex) {
+                // Fail closed: never fall back to unsigned JSON after signing fails.
+                LOG.errorf(ex,
+                        "Nao foi possivel assinar webhook. eventType=%s client=%s eventId=%s",
+                        item.payload().eventType(), item.payload().client().clientId(),
+                        item.payload().eventId());
+            }
+        }
+        if (signed.isEmpty()) {
             return;
         }
 
         session.getTransactionManager().enlistAfterCompletion(new AbstractKeycloakTransaction() {
             @Override
             protected void commitImpl() {
-                for (PendingWebhook item : pending) {
+                for (SignedPendingWebhook item : signed) {
                     try {
-                        dispatcher.dispatchAsync(item.config(), item.payload());
+                        dispatcher.dispatchAsync(item.config(), item.payload(), item.jwt());
                     } catch (RuntimeException e) {
                         LOG.errorf(e,
                                 "Nao foi possivel agendar webhook apos commit. eventType=%s client=%s eventId=%s",
@@ -296,7 +327,7 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
 
             @Override
             protected void rollbackImpl() {
-                for (PendingWebhook item : pending) {
+                for (SignedPendingWebhook item : signed) {
                     LOG.debugf(
                             "Webhook descartado por rollback. eventType=%s client=%s eventId=%s",
                             item.payload().eventType(),
@@ -348,6 +379,12 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
     private record PendingWebhook(
             ClientWebhookConfig config,
             ClientWebhookPayload payload) {
+    }
+
+    private record SignedPendingWebhook(
+            ClientWebhookConfig config,
+            ClientWebhookPayload payload,
+            String jwt) {
     }
 
     private static final class ClientUserEventListener implements EventListenerProvider {

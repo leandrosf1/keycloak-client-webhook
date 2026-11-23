@@ -1,5 +1,8 @@
 # Keycloak Client Webhook
 
+> **Development branch — signed webhook JWT (1.2.0-SNAPSHOT).** The `main` branch remains the stable 1.1.1 release. This branch changes the HTTP payload to `{"webhook_token":"<signed-jwt>"}` and **requires a JWT-validating receiver** before deployment. See [Signed JWT contract](docs/WEBHOOK_JWT_SECURITY.md). The remainder of this README describes the stable 1.1.1 contract.
+
+
 Extension for **Keycloak 26.7.4** that allows you to configure **webhooks per client and per event** directly from the Keycloak Admin Console.
 
 The goal of this project is to allow systems integrated with Keycloak to be automatically notified when relevant user-related events occur, without requiring additional logic in a portal application or an intermediate integration service.

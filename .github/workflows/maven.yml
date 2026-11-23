@@ -1,0 +1,39 @@
+name: Maven verification
+
+on:
+  push:
+    branches:
+      - feature/jwt-webhook-security
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Compile and run tests
+        run: mvn -B --no-transfer-progress clean verify
+      - name: Prepare SHA256 checksum and build metadata
+        shell: bash
+        run: |
+          sha256sum target/keycloak-client-role-webhook-1.2.0-SNAPSHOT.jar > target/SHA256SUMS.txt
+          printf 'Commit: %s\nBranch: %s\nKeycloak: 26.7.4\n' "$GITHUB_SHA" "$GITHUB_REF_NAME" > target/BUILD-INFO.txt
+      - name: Publish compiled JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: keycloak-client-webhook-1.2.0-SNAPSHOT
+          path: |
+            target/keycloak-client-role-webhook-1.2.0-SNAPSHOT.jar
+            target/SHA256SUMS.txt
+            target/BUILD-INFO.txt
+          retention-days: 30
+          if-no-files-found: error
