@@ -32,9 +32,36 @@ class WebhookJwtClaimsTest {
         assertEquals("ROLE_REVOKED", claims.get("event_type"));
         assertEquals(NOW, claims.get("iat"));
         assertEquals(NOW + 300, claims.get("exp"));
-        assertEquals("12345678901", ((ClientWebhookPayload.UserInfo) claims.get("user")).username());
+        assertEquals(Map.of("id", "user-uuid", "username", "12345678901"), claims.get("user"));
         assertEquals("role_java_esegtrab", ((ClientWebhookPayload.RoleInfo) claims.get("role")).name());
         assertThrows(UnsupportedOperationException.class, () -> claims.put("aud", "other-client"));
+    }
+
+    @Test
+    void removesEmailFirstNameAndLastNameEvenWhenPresentInSourceEvent() throws Exception {
+        ClientWebhookPayload eventWithProfile = new ClientWebhookPayload(
+                "evt-profile", "ROLE_REVOKED", "2026-11-23T12:26:09Z",
+                "PROVIDER_EVENT", "portal-acesso",
+                new ClientWebhookPayload.ClientInfo("internal-client", "java_esegtrab"),
+                new ClientWebhookPayload.UserInfo(
+                        "user-uuid", "12345678901",
+                        "private@example.test", "SENSITIVE_FIRST_NAME", "SENSITIVE_LAST_NAME"),
+                new ClientWebhookPayload.RoleInfo("role-uuid", "role_java_esegtrab"), null);
+
+        Map<String, Object> claims = WebhookJwtClaims.create(
+                eventWithProfile, "https://sso.example.org/realms/portal-acesso", NOW);
+
+        assertEquals(Map.of("id", "user-uuid", "username", "12345678901"),
+                claims.get("user"));
+        String serialized = org.keycloak.util.JsonSerialization.writeValueAsString(claims);
+        assertFalse(serialized.contains("private@example.test"));
+        assertFalse(serialized.contains("SENSITIVE_FIRST_NAME"));
+        assertFalse(serialized.contains("SENSITIVE_LAST_NAME"));
+        assertFalse(serialized.contains("\"email\""));
+        assertFalse(serialized.contains("\"firstName\""));
+        assertFalse(serialized.contains("\"lastName\""));
+        assertTrue(serialized.contains("\"username\""));
+        assertTrue(serialized.contains("\"user-uuid\""));
     }
 
     @Test
