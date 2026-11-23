@@ -55,7 +55,11 @@ public final class WebhookJwtClaims {
         claims.put("realm", event.realm());
         claims.put("client_id", event.client().clientId());
         claims.put("client", event.client());
-        claims.put("user", event.user());
+        // Data minimization: only signed ID and username are required by receivers.
+        // Never include email, firstName or lastName in the webhook token.
+        claims.put("user", Map.of(
+                "id", event.user().id(),
+                "username", event.user().username()));
         if (event.role() != null) {
             claims.put("role", event.role());
         }
