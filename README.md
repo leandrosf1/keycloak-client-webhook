@@ -1,758 +1,225 @@
 # Keycloak Client Webhook
 
-> **Development branch — signed webhook JWT (1.2.0-SNAPSHOT).** The `main` branch remains the stable 1.1.1 release. This branch changes the HTTP payload to `{"webhook_token":"<signed-jwt>"}` and **requires a JWT-validating receiver** before deployment. See [Signed JWT contract](docs/WEBHOOK_JWT_SECURITY.md). The remainder of this README describes the stable 1.1.1 contract.
-
-
-Extension for **Keycloak 26.7.4** that allows you to configure **webhooks per client and per event** directly from the Keycloak Admin Console.
-
-The goal of this project is to allow systems integrated with Keycloak to be automatically notified when relevant user-related events occur, without requiring additional logic in a portal application or an intermediate integration service.
-
-Webhook configuration is managed per client from the **Clients Webhook** page, and delivery is performed only **after the Keycloak transaction commits successfully**, preventing external calls from being triggered when the main operation is rolled back.
-
-> **Current version:** `1.1.1`  
-> **Target Keycloak version:** `26.7.4`  
-> **Java compilation target:** `17+`  
-> **Build tool:** Maven
-
----
-
-## Overview
-
-In many environments, each application integrated with SSO has its own client in Keycloak. In addition to authentication, these applications may need to be notified when something relevant happens to a user, for example:
-
-- a client role is removed from a user;
-- a client role is assigned to a user;
-- a user logs in;
-- a user logs out;
-- a user is removed from the realm;
-- a user changes credentials or profile information;
-- a user is temporarily or permanently locked out.
-
-**Keycloak Client Webhook** adds a **Clients Webhook** page to the Admin Console, where an independent webhook configuration can be created for each client.
-
-Each configuration defines:
-
-- the client representing the integrated application;
-- whether the webhook is enabled;
-- which events should be monitored;
-- which client roles should be monitored for role grant/revocation events;
-- the HTTP/HTTPS endpoint that will receive the webhook;
-- request timeout;
-- maximum number of delivery attempts.
-
----
-
-## Features
-
-- Webhook configuration **per client**.
-- Selection of **multiple events** per client.
-- Client role filtering for `ROLE_GRANTED` and `ROLE_REVOKED`.
-- Wildcard `*` support to monitor all roles of a client.
-- JSON payload over HTTP.
-- Delivery only **after commit** of the Keycloak transaction.
-- Automatic webhook discard when the transaction is rolled back.
-- Retry support for temporary failures.
-- Unique `eventId` for each webhook, enabling idempotency on the receiving system.
-- Administrative page integrated into the Keycloak Admin Console.
-- Optional admin theme to display the breadcrumb `Clients Webhook > Add`.
-- No user password, access token, or refresh token is included in the payload.
-
----
-
-## Architecture
-
-General flow:
-
-```text
-User / Administrator
-        |
-        | event in Keycloak
-        v
-+-----------------------------+
-|          Keycloak           |
-|                             |
-| User Event / Provider Event |
-+--------------+--------------+
-               |
-               v
-+-----------------------------+
-| Keycloak Client Webhook     |
-|                             |
-| 1. identifies the client    |
-| 2. loads its configuration  |
-| 3. validates event/role     |
-| 4. waits for commit         |
-+--------------+--------------+
-               |
-               | HTTP POST
-               v
-+-----------------------------+
-| Integrated application      |
-| configured endpoint         |
-+-----------------------------+
-```
-
-Each webhook configuration is persisted by Keycloak through `ComponentModel` and is associated with the realm. The project does not access database tables directly.
-
----
-
-## Supported Events
-
-Version `1.1.1` supports the following events:
-
-| Event | Source | Scope | Description |
-|---|---|---|---|
-| `ROLE_REVOKED` | Provider Event | Client | A client role was removed from a user |
-| `ROLE_GRANTED` | Provider Event | Client | A client role was assigned to a user |
-| `LOGIN` | User Event | Client | User login for a client |
-| `LOGOUT` | User Event | Client | Logout associated with a client |
-| `REGISTER` | User Event | Client | User registration when the event contains client and user information |
-| `RESET_PASSWORD` | User Event | Client | Password reset |
-| `UPDATE_EMAIL` | User Event | Client | Email update |
-| `VERIFY_EMAIL` | User Event | Client | Email verification |
-| `UPDATE_PROFILE` | User Event | Client | User profile update |
-| `UPDATE_CREDENTIAL` | User Event | Client | Credential update |
-| `REMOVE_CREDENTIAL` | User Event | Client | Credential removal |
-| `DELETE_ACCOUNT` | User Event | Client | Self-service account deletion when emitted by the Keycloak flow |
-| `USER_DISABLED_BY_PERMANENT_LOCKOUT` | User Event | Client | Native permanent lockout event from Keycloak |
-| `USER_DISABLED_BY_TEMPORARY_LOCKOUT` | User Event | Client | Native temporary lockout event from Keycloak |
-| `USER_REMOVED` | Provider Event | Realm / broadcast | Sent to every configured client subscribed to this event |
-
-### ROLE_REVOKED and ROLE_GRANTED
-
-These events are handled through Keycloak's internal model events.
-
-When a client role is removed from or assigned to a user, the provider:
-
-1. identifies the role;
-2. checks whether it is a **client role**;
-3. identifies the client that owns the role;
-4. looks up the webhook configuration for that client;
-5. checks whether the webhook is enabled;
-6. checks whether the event is selected;
-7. checks whether the role is included in the monitored roles list;
-8. schedules delivery to occur only after the transaction commits successfully.
-
-Realm roles are not handled by this flow in the current version.
-
-### User events
-
-Events such as `LOGIN`, `LOGOUT`, `RESET_PASSWORD`, and `UPDATE_PROFILE` are received through `EventListenerProvider`.
-
-A webhook is sent only when the Keycloak event provides:
-
-- realm;
-- client;
-- user.
-
-As a result, a login to client `application-a` does not trigger the webhook configured for `application-b`.
-
-### USER_REMOVED
-
-`USER_REMOVED` is different from the other events because deleting a user is a realm-level operation and does not naturally belong to a single client.
-
-When a user is removed, the provider captures a snapshot of the user's data before deletion and finds all webhook configurations in the realm that subscribe to `USER_REMOVED`.
-
-Example:
-
-```text
-User removed
-       |
-       +--> Client A subscribes to USER_REMOVED -> send
-       +--> Client B does not subscribe          -> ignore
-       +--> Client C subscribes to USER_REMOVED -> send
-```
-
-Delivery still occurs only after the user deletion transaction commits successfully.
-
----
-
-## Clients Webhook Page
-
-After installation, the Admin Console displays a new menu option:
-
-```text
-Clients Webhook
-```
-
-Each item represents a webhook configuration for one client.
-
-### Fields
-
-#### Client
-
-Selects the client representing the integrated application.
-
-Only one webhook configuration can exist for each client.
-
-#### Webhook enabled
-
-Enables or disables delivery without deleting the configuration.
-
-#### Monitored events
-
-List of events that can trigger the webhook.
-
-At least one event must be selected.
-
-No event is preselected by default.
-
-#### Monitored roles
-
-Used only when `ROLE_REVOKED` or `ROLE_GRANTED` is selected.
-
-You can specify individual roles:
-
-```text
-USER
-MANAGER
-ADMINISTRATOR
-```
-
-or use:
-
-```text
-*
-```
-
-to monitor all client roles for that client.
-
-When `*` is used, it must be the only value in the field.
-
-The configuration validates that the specified roles actually exist in the selected client.
-
-#### Webhook URI
-
-HTTP or HTTPS endpoint that will receive the JSON payload.
-
-Example:
-
-```text
-https://application.example.org/api/keycloak/events
-```
-
-The URI must contain a valid host and must not include embedded username/password credentials.
-
-#### Timeout
-
-Maximum duration of each HTTP attempt.
-
-Accepted range:
-
-```text
-250 ms to 60000 ms
-```
-
-Default value:
-
-```text
-5000 ms
-```
-
-#### Attempts
-
-Maximum number of delivery attempts.
-
-Accepted range:
-
-```text
-1 to 5
-```
-
-Default value:
-
-```text
-3
-```
-
----
-
-## Post-Commit Delivery
-
-The project uses the Keycloak transaction manager to register webhook delivery through `enlistAfterCompletion`.
-
-This means the HTTP request is not part of the main Keycloak transaction.
-
-```text
-Keycloak operation
-        |
-        v
-transaction in progress
-        |
-   +----+----+
-   |         |
-commit    rollback
-   |         |
-   v         v
-send      discard
-webhook   webhook
-```
-
-This behavior is especially important for events such as role revocation and user deletion.
-
-An unavailable remote endpoint should also not prevent the main Keycloak operation from completing successfully.
-
----
-
-## Retry Behavior
-
-Delivery is retried when a failure is considered temporary:
-
-- connection error;
-- timeout;
-- HTTP `408`;
-- HTTP `429`;
-- HTTP `5xx`.
-
-Any HTTP status between `200` and `299` is considered successful.
-
-`4xx` responses other than `408` and `429` are not retried.
-
-The delay between retries uses a simple backoff strategy capped at 2 seconds.
-
-> Retry state is stored only in memory. The current version does not provide a persistent outbox or durable queue.
-
----
-
-## Payload
-
-All events use a common payload structure.
-
-### Example: ROLE_REVOKED
-
-```json
-{
-  "eventId": "b2df4c59-1ab6-4c23-bb1e-b274efb81e92",
-  "eventType": "ROLE_REVOKED",
-  "occurredAt": "2026-10-02T11:00:00Z",
-  "source": "PROVIDER_EVENT",
-  "realm": "my-realm",
-  "client": {
-    "id": "internal-client-uuid",
-    "clientId": "integrated-application"
-  },
-  "user": {
-    "id": "user-uuid",
-    "username": "user123",
-    "email": "user@example.org",
-    "firstName": "John",
-    "lastName": "Doe"
-  },
-  "role": {
-    "id": "role-uuid",
-    "name": "USER"
-  },
-  "context": null
-}
-```
-
-### Example: LOGIN
-
-```json
-{
-  "eventId": "0f798892-c66d-41cf-9ac9-26ae67e06fd0",
-  "eventType": "LOGIN",
-  "occurredAt": "2026-10-02T11:01:00Z",
-  "source": "USER_EVENT",
-  "realm": "my-realm",
-  "client": {
-    "id": "internal-client-uuid",
-    "clientId": "integrated-application"
-  },
-  "user": {
-    "id": "user-uuid",
-    "username": "user123",
-    "email": "user@example.org",
-    "firstName": "John",
-    "lastName": "Doe"
-  },
-  "role": null,
-  "context": {
-    "ipAddress": "192.0.2.10",
-    "sessionId": "session-id"
-  }
-}
-```
-
-### Fields
-
-| Field | Description |
-|---|---|
-| `eventId` | Unique webhook identifier |
-| `eventType` | Event type |
-| `occurredAt` | Event date/time in UTC |
-| `source` | `PROVIDER_EVENT` or `USER_EVENT` |
-| `realm` | Realm name |
-| `client` | Client identification |
-| `user` | Snapshot of available user data |
-| `role` | Role information when applicable |
-| `context` | Additional information such as IP address and session ID when available |
-
-The project does not send passwords, access tokens, refresh tokens, or user credentials.
-
----
-
-## HTTP Headers
-
-Each request includes:
-
-```text
-Content-Type: application/json
-Accept: application/json
-X-Webhook-Event-Id: <eventId>
-X-Keycloak-Event-Type: <eventType>
-X-Keycloak-Realm: <realm>
-User-Agent: Keycloak-Client-Webhook/<version>
-```
-
-The receiving system should preferably use `eventId` as an idempotency key to prevent duplicate side effects when retries occur.
-
----
-
-## Requirements
-
-This version was developed for:
-
-- Keycloak `26.7.4`;
-- Maven `3.8+`;
-- Java `17+` for compilation;
-- `declarative-ui` feature enabled.
-
-The project uses internal Keycloak SPIs, including the administrative UI SPI. Because of that, future Keycloak versions may require code changes and should be tested before a production upgrade.
-
----
-
-## Project Structure
-
-```text
-src/main/java/com/leandrosf/keycloak/clientwebhook
-|
-+-- admin
-|   +-- ClientWebhookAdminPage.java
-|
-+-- config
-|   +-- ClientWebhookConfig.java
-|   +-- ClientWebhookConfigKeys.java
-|   +-- ClientWebhookConfigRepository.java
-|   +-- WebhookEventType.java
-|
-+-- model
-|   +-- ClientWebhookPayload.java
-|
-+-- runtime
-    +-- ClientWebhookDispatcher.java
-    +-- ClientWebhookEventListenerFactory.java
-```
-
-Resources:
-
-```text
-src/main/resources
-|
-+-- META-INF
-|   +-- services
-|   |   +-- org.keycloak.events.EventListenerProviderFactory
-|   |   +-- org.keycloak.services.ui.extend.UiPageProviderFactory
-|   +-- keycloak-themes.json
-|
-+-- theme/client-webhook-admin/admin
-    +-- theme.properties
-    +-- messages/
-```
-
----
-
-## Build
-
-From the project root directory:
+A **removable Keycloak extension** that configures webhooks **per client and per event** in the Keycloak Admin Console. Integrated applications receive an authenticated notification when selected user or client-role events occur.
+
+> **Repository status (November 2026)**
+>
+> - **`main`: `1.2.0-SNAPSHOT`**, including the signed **RS256 webhook JWT** introduced by PR [#1](https://github.com/leandrosf1/keycloak-client-webhook/pull/1) (merged November 23, 2026). The previous unsigned-JSON/1.1.1 description is **not** the current code contract.
+> - **`feature/oracle-webhook-outbox`: work in progress.** CI verification, design notes and small Outbox support classes/tests have been added; the Oracle repository, worker and transaction-listener integration are **not implemented or enabled yet**. The delivery mechanism remains **in memory**.
+> - **Do not use this development branch's JAR in production** until all acceptance tests, receiver compatibility checks and homologation have passed.
+>
+> The project uses Keycloak SPIs, including internal APIs. Validate every target Keycloak release before deploying.
+
+## What it does
+
+- Registers a declarative **Clients Webhook** page in the Admin Console and persists each configuration as a Keycloak realm `ComponentModel`.
+- Allows an enabled configuration per client with a selection of events, client-role filters, destination URI, timeout and attempts.
+- Monitors `ROLE_REVOKED` and `ROLE_GRANTED` for direct client-role operations; supports `USER_REMOVED` broadcast to subscribed clients and selected native user events.
+- Sends requests **after successful transaction commit**; discards them on rollback.
+- Signs a `webhook+jwt` token with the emitting realm's active **RS256** signing key. Receivers **must verify** the signed JWT.
+- Generates a unique event ID / JWT `jti` for each recipient delivery, enabling receiver-side idempotency.
+- Retries transient errors while the process remains alive; there is **no durable queue** in the current runtime.
+
+The provider is **optional**: removing its JAR and rebuilding Keycloak must not require changes to Keycloak's native code, tables, authentication flows or other custom providers. Removing it **also stops webhook notifications**. Integrated applications that rely on those notifications must have a decommissioning/reconciliation plan.
+
+## Versions and build
+
+| Item | Current source |
+| --- | --- |
+| Maven version | `1.2.0-SNAPSHOT` |
+| Maven artifact | `com.leandrosf.keycloak:keycloak-client-role-webhook` |
+| Source baseline | Keycloak `26.7.4` |
+| Additional CI compile/test target | Keycloak `26.8.2` (branch workflow; not a substitute for end-to-end compatibility tests) |
+| Java bytecode target | Java `17` |
+| CI runtime | JDK `21` |
+| Packaging | JAR |
+| Admin UI requirement | Keycloak `declarative-ui` feature |
+
+Build locally:
 
 ```bash
-mvn clean package
+mvn clean verify
+mvn clean verify -Dkeycloak.version=26.8.2
 ```
 
-On Windows, if you need to use a specific Java installation only for the current terminal session:
+GitHub Actions also runs Maven verification for both Keycloak versions on pushes to `main`/`feature/**` and on pull requests targeting `main`.
 
-```bat
-set "JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-21.0.9.10-hotspot"
-set "PATH=%JAVA_HOME%\bin;%PATH%"
-
-java -version
-mvn -version
-mvn clean package
-```
-
-The artifact will be generated at:
+Resulting artifact (version in current `pom.xml`):
 
 ```text
-target/keycloak-client-role-webhook-1.1.1.jar
+target/keycloak-client-role-webhook-1.2.0-SNAPSHOT.jar
 ```
 
----
+**Passing Maven tests alone is not production approval.** Run integration tests with the actual Keycloak distribution and database configuration in homologation.
 
-## Installing on Keycloak
+## Supported events
 
-### 1. Copy the JAR
+| Event | Source | Scope |
+| --- | --- | --- |
+| `ROLE_REVOKED`, `ROLE_GRANTED` | Keycloak model ProviderEvent | The client that owns the role |
+| `USER_REMOVED` | UserPreRemoved ProviderEvent | All clients configured for this event |
+| `LOGIN`, `LOGOUT`, `REGISTER` | Native user Event | Client in the event |
+| `RESET_PASSWORD`, `UPDATE_EMAIL`, `VERIFY_EMAIL`, `UPDATE_PROFILE` | Native user Event | Client in the event |
+| `UPDATE_CREDENTIAL`, `REMOVE_CREDENTIAL`, `DELETE_ACCOUNT` | Native user Event | Client in the event |
+| `USER_DISABLED_BY_PERMANENT_LOCKOUT`, `USER_DISABLED_BY_TEMPORARY_LOCKOUT` | Native user Event | Client in the event |
 
-Copy the generated JAR to:
+For role events, the listener accepts **client roles**, not realm roles, and checks both the selected event and configured role names. A role filter of `*` monitors all roles of that client. Native user events are sent only when the event provides a usable **realm, client and user ID**. A generic `enabled=false` user update is not itself a supported dedicated event.
 
-```text
-<KEYCLOAK_HOME>/providers/
-```
+## Admin Console configuration
 
-Example on Windows:
+In the realm's **Clients Webhook** page, choose:
 
-```text
-C:\Keycloak\keycloak-26.7.4\providers\keycloak-client-role-webhook-1.1.1.jar
-```
+1. **Client**: target integrated client (one configuration per client).
+2. **Webhook enabled**: on/off.
+3. **Monitored events**: one or more events, with no event selected by default.
+4. **Monitored roles**: exact client roles or `*` for role grant/revoke.
+5. **Webhook URI**: the receiving endpoint; **HTTPS required by default**.
+6. **Timeout**: 250–60,000 ms (default 5,000 ms).
+7. **Attempts**: 1–5 (default 3).
 
-Do not keep older versions of the same provider in the `providers` directory.
+The optional admin theme `client-webhook-admin` provides the `Clients Webhook > Add` breadcrumb and inherits from `keycloak.v2`.
 
-### 2. Rebuild Keycloak
+The listener is registered globally; there is no need to add it manually under Realm Settings > Events > Event listeners.
 
-```bat
-cd C:\Keycloak\keycloak-26.7.4\bin
-kc.bat build --feature-declarative-ui=enabled
-```
+## Signed webhook HTTP contract (current)
 
-### 3. Start Keycloak
-
-Use the normal startup procedure for your environment, for example:
-
-```bat
-kc.bat start --optimized
-```
-
-### 4. Verify provider loading
-
-The startup log should contain references to the extension providers, including the administrative page and the event listener.
-
----
-
-## Admin Theme Configuration
-
-Keycloak 26.7.4 uses the translation key `page` in declarative-page breadcrumbs.
-
-To display:
-
-```text
-Clients Webhook > Add
-```
-
-instead of:
-
-```text
-page > Add
-```
-
-the project includes the following admin theme:
-
-```text
-client-webhook-admin
-```
-
-To enable it:
-
-1. Open **Realm settings**.
-2. Open **Themes**.
-3. Under **Admin console theme**, select `client-webhook-admin`.
-4. Save the configuration.
-5. Reload the Admin Console.
-
-The theme inherits from `keycloak.v2` and overrides only the message required for the breadcrumb.
-
----
-
-## Creating a Webhook Configuration
-
-After installation:
-
-1. Open the desired realm.
-2. In the left navigation menu, click **Clients Webhook**.
-3. Click **Add**.
-4. Select the client.
-5. Enable **Webhook enabled**.
-6. Select one or more events under **Monitored events**.
-7. If `ROLE_REVOKED` or `ROLE_GRANTED` is selected, specify the desired roles or `*`.
-8. Enter the **Webhook URI**.
-9. Adjust timeout and attempts if necessary.
-10. Save.
-
-The configuration takes effect immediately for events processed by the provider.
-
-There is no need to manually add this listener under **Realm Settings > Events > Event listeners**, because the factory is registered globally.
-
----
-
-## Example Configuration
-
-```text
-Client: payroll-system
-Webhook enabled: true
-Events: ROLE_REVOKED, ROLE_GRANTED, LOGIN
-Roles: USER, MANAGER
-URI: https://application.example.org/api/keycloak/events
-Timeout: 5000
-Attempts: 3
-```
-
-With this configuration:
-
-- removing role `USER` from a user triggers `ROLE_REVOKED`;
-- assigning role `MANAGER` triggers `ROLE_GRANTED`;
-- assigning or removing another role that is not configured does not trigger a webhook;
-- login to client `payroll-system` triggers `LOGIN`;
-- login to another client does not use this configuration.
-
----
-
-## Receiving Endpoint Requirements
-
-The receiving endpoint should:
-
-- accept `POST` requests;
-- accept `application/json`;
-- return an HTTP `2xx` status when the event is processed successfully;
-- be idempotent, preferably by using `eventId`;
-- respond within the configured timeout;
-- handle retries without duplicating business effects.
-
-Conceptual example:
+**Breaking change from version 1.1.1:** the request body is no longer the old unsigned event object. It is:
 
 ```http
-POST /api/keycloak/events
+POST /api/keycloak/events HTTP/1.1
 Content-Type: application/json
-X-Webhook-Event-Id: b2df4c59-1ab6-4c23-bb1e-b274efb81e92
+Accept: application/json
+X-Webhook-Event-Id: <event-id>
 X-Keycloak-Event-Type: ROLE_REVOKED
+X-Keycloak-Realm: example-realm
+
+{"webhook_token":"<compact-rs256-jws>"}
 ```
 
-Successful response:
+The JWS header must have `alg=RS256`, `typ=webhook+jwt` and the realm key `kid`. Signed claims include:
 
-```http
-204 No Content
-```
+| Claim | Meaning |
+| --- | --- |
+| `iss` | Canonical realm issuer |
+| `aud` / `client_id` | Configured recipient client ID |
+| `sub` | Keycloak user ID |
+| `iat`, `nbf`, `exp` | JWT validity (300 seconds) |
+| `jti` | Unique event ID (stable across the current in-memory retry sequence) |
+| `token_use` | `client_webhook` |
+| `event_type`, `occurred_at`, `source`, `realm` | Signed event metadata |
+| `client` | Internal client ID and OIDC client ID |
+| `user` | **Only** Keycloak user ID and username |
+| `role` | Role ID and name, where applicable |
 
----
+Email, first name, last name, IP address and OIDC session ID are intentionally excluded from the **signed claims**. The JWT is **signed, not encrypted**; usernames might still contain personal identifiers and must be handled as sensitive data.
 
-## Security
+### What the receiving system must validate
 
-The current version does not implement an HMAC secret or dedicated token per client.
+- Trust a **preconfigured issuer and JWKS**; verify the RS256 signature using the expected `kid`. Never trust an arbitrary JWKS URL provided by the token.
+- Enforce exact `iss`, `aud`, `client_id`, `token_use=client_webhook` and `typ=webhook+jwt`; verify `sub == user.id`.
+- Validate `iat`, `nbf` and `exp`, including the five-minute maximum lifetime and permitted clock skew.
+- Validate the event type, client, role and user **from signed claims**, **not** from untrusted HTTP headers or a separately supplied CPF.
+- Deduplicate `jti` durably and make access changes idempotent; reject invalid or unsigned requests.
+- Return an HTTP `2xx` response (commonly `204`) after successful or already-completed processing.
 
-For production environments, protect the receiving endpoint using one or more of the following controls:
+Read the complete [JWT security and receiver contract](docs/WEBHOOK_JWT_SECURITY.md) before migrating receivers. **Install and test receiver-side JWT validation before changing the sender.**
 
-- private/internal network;
-- firewall rules;
-- reverse proxy;
-- source allowlisting;
-- TLS;
-- mTLS;
-- additional authentication implemented by the receiving endpoint.
-
-Never embed a username and password directly in the webhook URI.
-
-Also, do not publish the following in a public GitHub repository:
-
-- passwords;
-- client secrets;
-- tokens;
-- private certificates;
-- keystores;
-- environment configuration files containing credentials;
-- sensitive internal URLs.
-
----
-
-## Idempotency
-
-Retries can result in more than one HTTP request for the same event.
-
-For that reason, the receiving system should store or check:
+## Current post-commit delivery and retries
 
 ```text
-eventId
+Keycloak event
+   -> filter by configured client/event/role
+   -> capture event snapshot and sign RS256 token
+   -> transaction commits?
+      +-- no  -> discard
+      +-- yes -> enqueue HTTP delivery in memory
+                  -> 2xx: delivered
+                  -> 408 / 429 / 5xx / IO timeout: bounded retries
+                  -> other 4xx: stop
 ```
 
-before executing an irreversible business effect.
+Keycloak does **not** wait for the remote endpoint while performing the administrative transaction. The HTTP client does **not** follow redirects. There are up to 1–5 attempts according to client configuration, with brief in-memory backoff.
 
-Example:
+**Limitations:** after-process-crash messages can be lost; the retry queue is not persisted; the single JWT is reused during the existing retry sequence and may expire after five minutes. If signing fails, the sender does **not** fall back to unsigned JSON.
+
+## Webhook destination security
+
+HTTPS is mandatory in normal `start` mode unless the environment explicitly enables the provider's development override. For controlled local tests, Keycloak `start-dev` permits HTTP. The provider option is:
+
+```properties
+spi-events-listener--client-webhook-runtime--allow-http=true
+```
+
+Do not enable that exception in production. URI validation and TLS do not substitute for firewall rules, egress restrictions or destination allowlists (SSRF prevention). Do not put credentials in webhook URIs. Do not log complete JWTs, user identifiers or secrets unnecessarily.
+
+See [JWT security details](docs/WEBHOOK_JWT_SECURITY.md).
+
+## Install and remove the optional provider
+
+1. Back up configuration and verify receiver compatibility.
+2. Copy **one** compatible provider JAR to `<KEYCLOAK_HOME>/providers/`; remove older JAR versions of the same provider.
+3. Ensure the `declarative-ui` feature required by the admin page is enabled for the Keycloak version in use.
+4. Rebuild the Keycloak distribution (for example, from its installation directory, `bin/kc.bat build` on Windows or `bin/kc.sh build` on Linux, with the required feature settings).
+5. Start Keycloak with the site's normal startup procedure; check logs, the admin page, signed delivery and receiver behavior.
+
+**Uninstalling:** disable webhook configurations/stop processing, inspect any undelivered events, remove the provider JAR and its explicit SPI settings, rebuild and restart. Configurations saved as `ComponentModel` may remain in the database until intentionally cleaned up. Do **not** manually edit native Keycloak database rows. Removing the provider stops its notifications and requires planning for applications that depend on those events.
+
+The goal is safe removal of the **custom extension**, not independent execution of the extension without Keycloak.
+
+## Persistent Oracle Outbox — planned, NOT active
+
+Work on durable delivery is isolated on branch [`feature/oracle-webhook-outbox`](https://github.com/leandrosf1/keycloak-client-webhook/tree/feature/oracle-webhook-outbox). The planned table is `KEYCLOAK.KCW_WEBHOOK_OUTBOX` in Oracle 19c. The schema and indexes were created separately in the homologation database; the JAR will **not** create or alter native Keycloak tables or run schema DDL automatically.
+
+The final design aims to:
+
+- Persist monitored administrative events in the **same transaction** as role/user changes and never send HTTP before commit.
+- Process events in separate, bounded workers using atomic claims/lease recovery across nodes.
+- Keep a stable event ID, but **issue a newly signed JWT on each later delivery attempt**.
+- Recover pending deliveries after restarts and apply idempotency at the receiver.
+- Default the new feature to **disabled** and never send via both legacy and Outbox paths simultaneously.
+
+These are **design requirements, not completed features**. Listener integration, persistence, worker, Oracle integration tests and a documented policy for Outbox-write failures are required before rollout. The transaction policy must balance guaranteed notification against urgent revocation availability.
+
+See [Outbox implementation contract](docs/OUTBOX_IMPLEMENTATION_CONTRACT.md).
+
+## Tests, releases and mandatory pre-merge documentation
+
+Every pull request intended for `main` must satisfy **all** of the following:
+
+- [ ] README updated in the **feature branch** to describe the **actual code**, version, compatibility, configuration, receiver protocol, limitations, migration and rollback/uninstall behavior; planned features must be clearly identified as such.
+- [ ] Security and other detailed documentation updated when contracts or settings change.
+- [ ] Relevant positive, negative, regression and invariant **automated tests** added/updated, with results reported.
+- [ ] GitHub Actions Maven verification passes for both supported Keycloak versions; any integration-test gaps are made explicit.
+- [ ] For changes involving durable delivery, actual Oracle 19c/Keycloak homologation tests cover commit/rollback, database failures, concurrency, recovery, retries and token validity.
+- [ ] No credentials, private keys, internal sensitive endpoints or production data committed.
+- [ ] A pull request is reviewed, and **merge to `main` occurs only after explicit approval**.
+
+Passing checks is **not** permission to deploy. Production activation requires a separate decision, receiver validation and a rollback plan.
+
+## Repository layout
 
 ```text
-receive eventId ABC
-    |
-    +-- already processed -> return 2xx without repeating the operation
-    |
-    +-- new -> process, store ABC, return 2xx
+src/main/java/com/leandrosf/keycloak/clientwebhook/
+  admin/     ClientWebhookAdminPage
+  config/    Per-client configuration, supported event types, transport policy
+  model/     ClientWebhookPayload
+  runtime/   Event listener, in-memory dispatcher, RS256 signer/claims
+             (Outbox support classes under active development on feature branch)
+src/main/resources/META-INF/services/  Keycloak SPI registrations
+src/main/resources/theme/              Optional admin breadcrumb theme
+src/test/java/                         Unit tests
+docs/                                  JWT contract and Outbox design
+.github/workflows/maven.yml            CI verification
 ```
 
----
+## Historical versions
 
-## Current Limitations
+- **1.1.1** — Configurable events and client-role filters, Admin Console page/theme, post-commit HTTP JSON delivery with in-memory retries. **Unsigned JSON contract; legacy only.**
+- **1.2.0-SNAPSHOT (current source on `main`)** — RS256 signed JWT with reduced user claims, fail-closed signature handling, HTTPS-by-default delivery, dedicated development-only HTTP option, security contract and automated tests. **Breaking receiver protocol change.**
+- **Oracle Outbox** — Under development; **not yet released, merged or operational**.
 
-- Officially tested/declared compatibility is limited to Keycloak `26.7.4`.
-- The project uses internal Keycloak SPIs that may change between versions.
-- Realm roles are not handled by `ROLE_GRANTED` and `ROLE_REVOKED`.
-- Roles inherited through groups are not automatically converted into direct user role events.
-- A simple administrative user disable operation (`enabled=false`) does not have a dedicated event implementation in this version.
-- `USER_DISABLED_BY_PERMANENT_LOCKOUT` and `USER_DISABLED_BY_TEMPORARY_LOCKOUT` represent Keycloak's native lockout events.
-- Retry state is kept in memory only.
-- There is no persistent outbox or durable queue.
-- There is no per-client HMAC signature in this version.
-- HTTP redirects are not followed by the HTTP client.
+## Contributing and licensing
 
-For scenarios that require strong delivery guarantees, consider extending the project with a persistent outbox or messaging integration.
+When reporting bugs, provide Keycloak, Java and provider versions, the selected event and **sanitized** relevant logs. Issues and pull requests are welcome.
 
----
-
-## Version 1.1.1
-
-Main features and fixes:
-
-- configurable events per client;
-- `ROLE_REVOKED` is no longer mandatory or preselected;
-- explicit selection of at least one event;
-- fix for `MULTIVALUED_LIST_TYPE` form handling in the Keycloak 26.7.4 Admin Console;
-- **Clients Webhook** administrative page;
-- webhook URI rendered as a text field;
-- optional `Clients Webhook > Add` breadcrumb through the admin theme;
-- Java namespace `com.leandrosf.keycloak.clientwebhook`;
-- post-commit webhook delivery;
-- configurable retry behavior.
-
----
-
-## Development
-
-Java namespace:
-
-```text
-com.leandrosf.keycloak.clientwebhook
-```
-
-Maven coordinates:
-
-```xml
-<groupId>com.leandrosf.keycloak</groupId>
-<artifactId>keycloak-client-role-webhook</artifactId>
-<version>1.1.1</version>
-```
-
----
-
-## Contributing
-
-Issues and pull requests are welcome for bug fixes, additional events, HMAC authentication, persistent outbox support, metrics, and compatibility improvements for other Keycloak versions.
-
-When reporting an issue, please include at least:
-
-- Keycloak version;
-- Java version;
-- plugin version;
-- configured event;
-- relevant log excerpt with sensitive information removed.
-
----
-
-## License
-
-Choose a license before publishing the project as open source. Common options for Java/Keycloak extensions include **Apache License 2.0** and **MIT License**.
-
-Without a `LICENSE` file, the source code remains protected by default copyright rules and third parties do not automatically receive broad permission to reuse it.
+No `LICENSE` file is present in this repository. Adding a license requires a separate decision by the project owner.
