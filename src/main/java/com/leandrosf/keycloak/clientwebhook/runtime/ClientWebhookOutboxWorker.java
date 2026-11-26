@@ -31,6 +31,9 @@ public final class ClientWebhookOutboxWorker implements AutoCloseable {
     private final String workerId = UUID.randomUUID().toString();
     private final int pollMs;
     private final int batchSize;
+    private long lastPollErrorLogAt;
+    private int suppressedPollErrors;
+    private static final long POLL_ERROR_LOG_INTERVAL_MS = 60_000L;
 
     public ClientWebhookOutboxWorker(KeycloakSessionFactory sessions,
                                     ClientWebhookOutboxStore store, int pollMs, int batchSize) {
@@ -61,7 +64,19 @@ public final class ClientWebhookOutboxWorker implements AutoCloseable {
                 if (claimed != null) deliver(claimed, owner);
             }
         } catch (Exception e) {
-            LOG.errorf("Outbox polling error (%s); will retry next poll", e.getClass().getSimpleName());
+            // Keep the poller alive, but do not generate thousands of identical errors.
+            // Only safe JDBC metadata is logged; never SQL parameters/payloads/CPF.
+            long now = System.currentTimeMillis();
+            if (lastPollErrorLogAt == 0L || now - lastPollErrorLogAt >= POLL_ERROR_LOG_INTERVAL_MS) {
+                ClientWebhookOutboxSqlDiagnostic.Detail detail =
+                        ClientWebhookOutboxSqlDiagnostic.from(e);
+                LOG.errorf("Outbox polling failed: exception=%s jdbcCode=%d sqlState=%s suppressed=%d (polling will continue)",
+                        detail.exceptionType(), detail.vendorCode(), detail.sqlState(), suppressedPollErrors);
+                lastPollErrorLogAt = now;
+                suppressedPollErrors = 0;
+            } else {
+                suppressedPollErrors++;
+            }
         }
     }
 
