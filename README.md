@@ -180,7 +180,7 @@ The experimental implementation aims to:
 
 The branch now contains the listener integration, transactional Oracle store, worker with expiring claims, fresh JWT creation on delivery and unit tests. **These are not verified against a running Oracle 19c database/Keycloak installation.** GitHub Actions passing is not evidence of transactional rollback, database SQL behavior or multi-node safety. The configured behavior for monitored administrative events is fail-closed on detected Outbox insert failure; confirm native transaction rollback in homologation. Login/MFA events remain on the legacy post-commit sender, and are therefore not durable yet.
 
-See [Outbox implementation contract](docs/OUTBOX_IMPLEMENTATION_CONTRACT.md).
+See [Outbox implementation contract](docs/OUTBOX_IMPLEMENTATION_CONTRACT.md). Follow the [Oracle 19c homologation checklist](docs/OUTBOX_HOMOLOGATION_CHECKLIST.md) before any release decision.
 
 ### Experimental configuration and support boundary
 
