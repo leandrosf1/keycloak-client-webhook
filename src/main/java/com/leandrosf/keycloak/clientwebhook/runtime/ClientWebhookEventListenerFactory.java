@@ -311,7 +311,7 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
             return;
         }
 
-        if (outboxEnabled) {
+        if (outboxEnabled && shouldPersistInOutbox(pending.get(0).payload())) {
             for (PendingWebhook item : pending) {
                 if (!ClientWebhookTransportPolicy.isAllowedEndpoint(item.config().url())) {
                     LOG.errorf("Outbox destination rejected: client=%s eventId=%s",
@@ -379,6 +379,20 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
                 }
             }
         });
+    }
+
+    /**
+     * The durable queue is strictly limited to administrative ProviderEvents.
+     * LOGIN, LOGOUT, RESET_PASSWORD and every other native user event keep
+     * the previous post-commit delivery path, even when Outbox is enabled.
+     */
+    static boolean shouldPersistInOutbox(ClientWebhookPayload payload) {
+        if (payload == null || !ClientWebhookPayload.SOURCE_PROVIDER_EVENT.equals(payload.source())) {
+            return false;
+        }
+        return WebhookEventType.ROLE_REVOKED.name().equals(payload.eventType())
+                || WebhookEventType.ROLE_GRANTED.name().equals(payload.eventType())
+                || WebhookEventType.USER_REMOVED.name().equals(payload.eventType());
     }
 
     private static ClientModel resolveClient(RealmModel realm, String eventClientId) {
