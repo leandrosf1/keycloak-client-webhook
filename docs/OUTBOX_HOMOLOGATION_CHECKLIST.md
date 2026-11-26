@@ -51,6 +51,34 @@ Execute each scenario and record logs, database evidence, receiver calls and Key
 
 **Do not assume** transaction rollback or the Oracle SQL dialect is correct based only on unit tests. Observe real database state after both the success and rollback paths. Verify that changing an endpoint does not redirect events already queued (destination is snapshotted).
 
+## SQL schema consistency preflight (required before enabling)
+
+The initial table created in homologation may not include all columns currently referenced by the experimental Oracle adapter. **Do not activate the Outbox until this has been checked and the adapter and schema have been reconciled.** A Maven build does not validate SQL table structure.
+
+Run these read-only statements against the **same database/service used by the Keycloak datasource**:
+
+```sql
+SELECT SYS_CONTEXT('USERENV','CURRENT_SCHEMA') AS CURRENT_SCHEMA,
+       SYS_CONTEXT('USERENV','DB_NAME') AS DATABASE_NAME
+FROM DUAL;
+
+SELECT OWNER, TABLE_NAME
+FROM ALL_TABLES
+WHERE OWNER = 'KEYCLOAK' AND TABLE_NAME = 'KCW_WEBHOOK_OUTBOX';
+
+SELECT COLUMN_ID, COLUMN_NAME, DATA_TYPE, NULLABLE, DATA_DEFAULT
+FROM ALL_TAB_COLUMNS
+WHERE OWNER='KEYCLOAK' AND TABLE_NAME='KCW_WEBHOOK_OUTBOX'
+ORDER BY COLUMN_ID;
+
+SELECT COUNT(*) AS TOTAL
+FROM KEYCLOAK.KCW_WEBHOOK_OUTBOX;
+```
+
+The experimental adapter currently references extra columns such as `REALM_NAME`, `ENDPOINT_URL`, `TIMEOUT_MS`, `MAX_ATTEMPTS_PER_CYCLE`, `UPDATED_AT`, `LAST_HTTP_STATUS` and `RETRY_CYCLE`. These **must not be presumed to exist** in the first migration. Do not change schema manually or run ALTER TABLE before producing a reviewed migration (or adjusting the adapter to the original schema).
+
+If the poller reports a JDBC error code, investigate its Oracle `ORA-` meaning before assuming the cause. An `SQLGrammarException` alone cannot distinguish missing objects, columns or permissions.
+
 ## Read-only monitoring SQL
 
 ```sql
