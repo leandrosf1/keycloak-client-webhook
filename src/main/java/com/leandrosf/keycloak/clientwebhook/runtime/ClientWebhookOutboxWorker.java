@@ -6,9 +6,7 @@ import org.jboss.logging.Logger;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.KeycloakSessionFactory;
 import org.keycloak.models.RealmModel;
-import org.keycloak.util.JsonSerialization;
 
-import java.io.IOException;
 import java.net.URI;
 import java.util.List;
 import java.util.UUID;
@@ -71,7 +69,7 @@ public final class ClientWebhookOutboxWorker implements AutoCloseable {
         final ClientWebhookOutboxStore.EventData data;
         final URI endpoint;
         try {
-            data = JsonSerialization.readValue(e.payloadJson(), ClientWebhookOutboxStore.EventData.class);
+            data = ClientWebhookOutboxPayloadCodec.decode(e.payloadJson());
             endpoint = URI.create(e.endpointUrl());
             if (data == null || data.payload() == null || data.issuer() == null
                     || !ClientWebhookTransportPolicy.isAllowedEndpoint(endpoint)
@@ -81,7 +79,7 @@ public final class ClientWebhookOutboxWorker implements AutoCloseable {
                 markFailed(e, owner, null, "INVALID_STORED_EVENT");
                 return;
             }
-        } catch (IOException | IllegalArgumentException | NullPointerException ex) {
+        } catch (IllegalArgumentException | NullPointerException ex) {
             markFailed(e, owner, null, "INVALID_STORED_EVENT");
             return;
         }
