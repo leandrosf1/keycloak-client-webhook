@@ -5,7 +5,7 @@ A **removable Keycloak extension** that configures webhooks **per client and per
 > **Repository status (November 2026)**
 >
 > - **`main`: `1.2.0-SNAPSHOT`**, including the signed **RS256 webhook JWT** introduced by PR [#1](https://github.com/leandrosf1/keycloak-client-webhook/pull/1) (merged November 23, 2026). The previous unsigned-JSON/1.1.1 description is **not** the current code contract.
-> - **`feature/oracle-webhook-outbox`: work in progress.** CI verification, design notes and small Outbox support classes/tests have been added; the Oracle repository, worker and transaction-listener integration are **not implemented or enabled yet**. The delivery mechanism remains **in memory**.
+> - **`feature/oracle-webhook-outbox`: experimental implementation, not released.** Opt-in Oracle Outbox store, worker, listener integration and unit tests are now in the branch. The feature defaults to **off** and continues using in-memory dispatch until explicitly enabled. Real Oracle 19c/Keycloak transaction tests remain **mandatory before rollout**.
 > - **Do not use this development branch's JAR in production** until all acceptance tests, receiver compatibility checks and homologation have passed.
 >
 > The project uses Keycloak SPIs, including internal APIs. Validate every target Keycloak release before deploying.
@@ -166,11 +166,11 @@ See [JWT security details](docs/WEBHOOK_JWT_SECURITY.md).
 
 The goal is safe removal of the **custom extension**, not independent execution of the extension without Keycloak.
 
-## Persistent Oracle Outbox — planned, NOT active
+## Persistent Oracle Outbox — experimental, OFF by default
 
 Work on durable delivery is isolated on branch [`feature/oracle-webhook-outbox`](https://github.com/leandrosf1/keycloak-client-webhook/tree/feature/oracle-webhook-outbox). The planned table is `KEYCLOAK.KCW_WEBHOOK_OUTBOX` in Oracle 19c. The schema and indexes were created separately in the homologation database; the JAR will **not** create or alter native Keycloak tables or run schema DDL automatically.
 
-The final design aims to:
+The experimental implementation aims to:
 
 - Persist monitored administrative events in the **same transaction** as role/user changes and never send HTTP before commit.
 - Process events in separate, bounded workers using atomic claims/lease recovery across nodes.
@@ -178,9 +178,24 @@ The final design aims to:
 - Recover pending deliveries after restarts and apply idempotency at the receiver.
 - Default the new feature to **disabled** and never send via both legacy and Outbox paths simultaneously.
 
-These are **design requirements, not completed features**. Listener integration, persistence, worker, Oracle integration tests and a documented policy for Outbox-write failures are required before rollout. The transaction policy must balance guaranteed notification against urgent revocation availability.
+The branch now contains the listener integration, transactional Oracle store, worker with expiring claims, fresh JWT creation on delivery and unit tests. **These are not verified against a running Oracle 19c database/Keycloak installation.** GitHub Actions passing is not evidence of transactional rollback, database SQL behavior or multi-node safety. The configured behavior for monitored administrative events is fail-closed on detected Outbox insert failure; confirm native transaction rollback in homologation. Login/MFA events remain on the legacy post-commit sender, and are therefore not durable yet.
 
 See [Outbox implementation contract](docs/OUTBOX_IMPLEMENTATION_CONTRACT.md).
+
+### Experimental configuration and support boundary
+
+The feature is **disabled by default**. For a controlled homologation deployment only, the SPI options are:
+
+```properties
+spi-events-listener--client-webhook-runtime--outbox-enabled=true
+spi-events-listener--client-webhook-runtime--outbox-poll-ms=3000
+spi-events-listener--client-webhook-runtime--outbox-batch-size=10
+```
+
+Confirm option syntax and resolution against the deployed Keycloak distribution before enabling. Only explicitly configured `ROLE_GRANTED`, `ROLE_REVOKED` and `USER_REMOVED` use the Outbox when enabled. Native user events (`LOGIN`, `LOGOUT`, etc.) retain legacy dispatch. Never enable the feature in production solely because GitHub Actions succeeds. Oracle tables must already be provisioned; the JAR performs no DDL. Disabling the feature also stops processing of **previously pending** Outbox events: reconcile them before disabling/removing the provider.
+
+`ClientWebhookOutboxStore` is the database-neutral interface, with `OracleClientWebhookOutboxStore` as the only implementation so far. Additional adapters require their own DDL, concurrency and integration test results.
+
 
 ## Database portability
 
@@ -214,7 +229,7 @@ src/main/java/com/leandrosf/keycloak/clientwebhook/
   config/    Per-client configuration, supported event types, transport policy
   model/     ClientWebhookPayload
   runtime/   Event listener, in-memory dispatcher, RS256 signer/claims
-             (Outbox support classes under active development on feature branch)
+             (Opt-in Oracle Outbox worker/store and privacy codec in feature branch)
 src/main/resources/META-INF/services/  Keycloak SPI registrations
 src/main/resources/theme/              Optional admin breadcrumb theme
 src/test/java/                         Unit tests
@@ -226,7 +241,7 @@ docs/                                  JWT contract and Outbox design
 
 - **1.1.1** — Configurable events and client-role filters, Admin Console page/theme, post-commit HTTP JSON delivery with in-memory retries. **Unsigned JSON contract; legacy only.**
 - **1.2.0-SNAPSHOT (current source on `main`)** — RS256 signed JWT with reduced user claims, fail-closed signature handling, HTTPS-by-default delivery, dedicated development-only HTTP option, security contract and automated tests. **Breaking receiver protocol change.**
-- **Oracle Outbox** — Under development; **not yet released, merged or operational**.
+- **Oracle Outbox** — Experimental implementation exists on feature branch; **not yet released, merged, integration-tested with Oracle or operational**.
 
 ## Contributing and licensing
 
