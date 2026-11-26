@@ -44,6 +44,11 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
     private KeycloakSessionFactory sessionFactory;
     private ProviderEventListener providerEventListener;
     private ClientWebhookDispatcher dispatcher;
+    private ClientWebhookOutboxStore outboxStore;
+    private ClientWebhookOutboxWorker outboxWorker;
+    private boolean outboxEnabled;
+    private int outboxPollMs;
+    private int outboxBatchSize;
 
     @Override
     public EventListenerProvider create(KeycloakSession session) {
@@ -53,6 +58,15 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
     @Override
     public void init(Config.Scope config) {
         dispatcher = new ClientWebhookDispatcher();
+        // Explicit opt-in. When false no Outbox SQL or worker runs.
+        outboxEnabled = Boolean.TRUE.equals(config.getBoolean("outbox-enabled", false));
+        outboxPollMs = config.getInt("outbox-poll-ms", 3000);
+        outboxBatchSize = config.getInt("outbox-batch-size", 10);
+        if (outboxPollMs < 1000 || outboxPollMs > 60000
+                || outboxBatchSize < 1 || outboxBatchSize > 100) {
+            throw new IllegalArgumentException("Invalid Outbox worker limits");
+        }
+        if (outboxEnabled) outboxStore = new OracleClientWebhookOutboxStore();
     }
 
     @Override
@@ -61,6 +75,14 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
         this.providerEventListener = this::onProviderEvent;
         factory.register(providerEventListener);
         LOG.info("Client Webhook inicializado");
+        if (outboxEnabled) {
+            outboxWorker = new ClientWebhookOutboxWorker(factory, outboxStore,
+                    outboxPollMs, outboxBatchSize);
+            outboxWorker.start();
+            LOG.warn("Client Webhook Outbox ENABLED for administrative events");
+        } else {
+            LOG.info("Client Webhook Outbox disabled; legacy dispatch unchanged");
+        }
         if (ClientWebhookTransportPolicy.isHttpAllowed()) {
             LOG.warn("Client Webhook: envio HTTP sem TLS PERMITIDO pelo perfil start-dev "
                     + "ou pela opcao allow-http=true. Restrinja os destinos e a rede de homologacao.");
@@ -73,6 +95,9 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
     public void close() {
         if (sessionFactory != null && providerEventListener != null) {
             sessionFactory.unregister(providerEventListener);
+        }
+        if (outboxWorker != null) {
+            outboxWorker.close();
         }
         if (dispatcher != null) {
             dispatcher.close();
@@ -115,8 +140,9 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
                 handleUserRemoved(userPreRemovedEvent);
             }
         } catch (RuntimeException e) {
-            // Nunca derrubar a operacao principal do Keycloak por falha de integracao.
+            // Only a confirmed Outbox persistence failure is fail-closed.
             LOG.error("Erro ao processar ProviderEvent para webhook", e);
+            if (e instanceof OutboxPersistenceException) throw e;
         }
     }
 
@@ -285,6 +311,23 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
             return;
         }
 
+        if (outboxEnabled) {
+            for (PendingWebhook item : pending) {
+                if (!ClientWebhookTransportPolicy.isAllowedEndpoint(item.config().url())) {
+                    LOG.errorf("Outbox destination rejected: client=%s eventId=%s",
+                            item.payload().client().clientId(), item.payload().eventId());
+                    continue;
+                }
+                try {
+                    String issuer = WebhookJwtSigner.issuer(session, realm);
+                    outboxStore.append(session, realm.getId(), item.config(), item.payload(), issuer);
+                } catch (RuntimeException e) {
+                    throw new OutboxPersistenceException("Transactional Outbox insert failed", e);
+                }
+            }
+            return;
+        }
+
         // Sign while the request/realm context is still available. Post-commit
         // callbacks and worker threads must never use KeycloakSession or UserModel.
         List<SignedPendingWebhook> signed = new ArrayList<>();
@@ -374,6 +417,12 @@ public final class ClientWebhookEventListenerFactory implements EventListenerPro
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static final class OutboxPersistenceException extends RuntimeException {
+        private OutboxPersistenceException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     private record PendingWebhook(
