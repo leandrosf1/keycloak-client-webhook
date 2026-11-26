@@ -5,10 +5,7 @@ import com.leandrosf.keycloak.clientwebhook.model.ClientWebhookPayload;
 import jakarta.persistence.EntityManager;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.models.KeycloakSession;
-import org.keycloak.util.JsonSerialization;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.sql.Clob;
 import java.sql.SQLException;
 import java.util.List;
@@ -19,7 +16,7 @@ import java.util.List;
  */
 public final class OracleClientWebhookOutboxStore implements ClientWebhookOutboxStore {
     private static final String TABLE = "KEYCLOAK.KCW_WEBHOOK_OUTBOX";
-    private static final int MAX_JSON_BYTES = 3500;
+    private static final int MAX_JSON_BYTES = ClientWebhookOutboxPayloadCodec.MAX_JSON_BYTES;
 
     private static EntityManager em(KeycloakSession session) {
         JpaConnectionProvider provider = session.getProvider(JpaConnectionProvider.class);
@@ -36,33 +33,19 @@ public final class OracleClientWebhookOutboxStore implements ClientWebhookOutbox
                 || payload.user().username().isBlank()) {
             throw new IllegalArgumentException("Incomplete webhook Outbox event");
         }
-        // Never persist email, personal name, IP address, OIDC session ID or signed JWT.
-        ClientWebhookPayload minimal = new ClientWebhookPayload(
-                payload.eventId(), payload.eventType(), payload.occurredAt(),
-                payload.source(), payload.realm(), payload.client(),
-                new ClientWebhookPayload.UserInfo(payload.user().id(),
-                        payload.user().username(), null, null, null),
-                payload.role(), null);
-        String json;
-        try {
-            json = JsonSerialization.writeValueAsString(new EventData(issuer, minimal));
-        } catch (IOException e) {
-            throw new IllegalStateException("Could not serialize Outbox event", e);
-        }
-        if (json.getBytes(StandardCharsets.UTF_8).length > MAX_JSON_BYTES) {
-            throw new IllegalArgumentException("Outbox JSON exceeds the supported binding size");
-        }
+        // The codec enforces data minimization and the Oracle binding limit.
+        String json = ClientWebhookOutboxPayloadCodec.encode(payload, issuer);
         em(session).createNativeQuery("INSERT INTO " + TABLE + " ("
                 + "EVENT_ID,REALM_ID,REALM_NAME,CLIENT_ID,USER_ID,EVENT_TYPE,"
                 + "ENDPOINT_URL,TIMEOUT_MS,MAX_ATTEMPTS_PER_CYCLE,PAYLOAD_JSON) "
                 + "VALUES (:eventId,:realmId,:realmName,:clientId,:userId,:eventType,"
                 + ":url,:timeout,:maxAttempts,TO_CLOB(:json))")
-                .setParameter("eventId", minimal.eventId())
+                .setParameter("eventId", payload.eventId())
                 .setParameter("realmId", realmId)
-                .setParameter("realmName", minimal.realm())
-                .setParameter("clientId", minimal.client().clientId())
-                .setParameter("userId", minimal.user().id())
-                .setParameter("eventType", minimal.eventType())
+                .setParameter("realmName", payload.realm())
+                .setParameter("clientId", payload.client().clientId())
+                .setParameter("userId", payload.user().id())
+                .setParameter("eventType", payload.eventType())
                 .setParameter("url", config.url().toString())
                 .setParameter("timeout", config.timeoutMs())
                 .setParameter("maxAttempts", config.maxAttempts())
