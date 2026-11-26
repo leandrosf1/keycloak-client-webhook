@@ -182,6 +182,16 @@ These are **design requirements, not completed features**. Listener integration,
 
 See [Outbox implementation contract](docs/OUTBOX_IMPLEMENTATION_CONTRACT.md).
 
+## Database portability
+
+The webhook provider is **not inherently tied to Oracle**. Client/webhook configuration is stored through Keycloak's native `ComponentModel` and the signed-JWT sender does not require a specific database. The **persistent Outbox**, however, is initially being designed and validated for **Oracle Database 19c** with the provider-owned table `KEYCLOAK.KCW_WEBHOOK_OUTBOX`.
+
+The architecture should keep event capture, JWT signing, HTTP delivery and retry orchestration **separate from the database persistence implementation**. This will allow future adapters for other databases officially supported by the relevant Keycloak release (for example, PostgreSQL, MySQL, MariaDB and Microsoft SQL Server), without changing the event/receiver contract.
+
+**This is an extensibility goal, not a claim that the Outbox already works on all databases.** For each additional database, the project will need to provide and validate its schema migration, SQL/JPA compatibility, JSON and timestamp mapping, indexes, atomic event claiming, lock/lease handling, failure recovery and transactional behavior. Tests must demonstrate commit/rollback consistency and concurrent processing on that specific database and Keycloak version.
+
+The first operational target remains Oracle 19c. The initial JAR must not create or alter Keycloak's native schema automatically, and a database adapter may not compromise the provider's ability to be disabled or removed cleanly. Database support should be explicitly documented only after successful integration testing.
+
 ## Tests, releases and mandatory pre-merge documentation
 
 Every pull request intended for `main` must satisfy **all** of the following:
