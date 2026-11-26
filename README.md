@@ -26,7 +26,7 @@ The provider is **optional**: removing its JAR and rebuilding Keycloak must not 
 
 | Item | Current source |
 | --- | --- |
-| Maven version | `1.2.0-SNAPSHOT` |
+| Maven version on this feature branch | `1.3.0-SNAPSHOT` (`main` remains `1.2.0-SNAPSHOT`) |
 | Maven artifact | `com.leandrosf.keycloak:keycloak-client-role-webhook` |
 | Source baseline | Keycloak `26.7.4` |
 | Additional CI compile/test target | Keycloak `26.8.2` (branch workflow; not a substitute for end-to-end compatibility tests) |
@@ -47,7 +47,7 @@ GitHub Actions also runs Maven verification for both Keycloak versions on pushes
 Resulting artifact (version in current `pom.xml`):
 
 ```text
-target/keycloak-client-role-webhook-1.2.0-SNAPSHOT.jar
+target/keycloak-client-role-webhook-1.3.0-SNAPSHOT.jar
 ```
 
 **Passing Maven tests alone is not production approval.** Run integration tests with the actual Keycloak distribution and database configuration in homologation.
@@ -241,7 +241,7 @@ docs/                                  JWT contract and Outbox design
 
 - **1.1.1** — Configurable events and client-role filters, Admin Console page/theme, post-commit HTTP JSON delivery with in-memory retries. **Unsigned JSON contract; legacy only.**
 - **1.2.0-SNAPSHOT (current source on `main`)** — RS256 signed JWT with reduced user claims, fail-closed signature handling, HTTPS-by-default delivery, dedicated development-only HTTP option, security contract and automated tests. **Breaking receiver protocol change.**
-- **Oracle Outbox** — Experimental implementation exists on feature branch; **not yet released, merged, integration-tested with Oracle or operational**.
+- **1.3.0-SNAPSHOT (Oracle Outbox)** — Experimental feature-branch implementation; **not yet released, merged, integration-tested with Oracle or operational**.
 
 ## Contributing and licensing
 
