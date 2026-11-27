@@ -110,8 +110,13 @@ public final class ClientWebhookOutboxWorker implements AutoCloseable {
             int status = sender.send(endpoint, e.timeoutMs(), data.payload(), jwt);
             if (status >= 200 && status <= 299) {
                 boolean updated = tx(session -> store.markDelivered(session, e, owner, status));
-                if (updated) LOG.infof("Outbox delivered: eventId=%s client=%s status=%d",
-                        e.eventId(), e.clientId(), status);
+                if (updated) {
+                    LOG.infof("Outbox delivered: eventId=%s client=%s status=%d",
+                            e.eventId(), e.clientId(), status);
+                } else {
+                    LOG.warnf("Outbox delivery acknowledged remotely but ownership changed: eventId=%s attempt=%d; "
+                            + "receiver must deduplicate retries", e.eventId(), e.attemptCount());
+                }
             } else if (ClientWebhookOutboxHttpSender.isRetryable(status)) {
                 markRetry(e, owner, status, "RETRYABLE_HTTP_STATUS");
             } else {
@@ -141,14 +146,24 @@ public final class ClientWebhookOutboxWorker implements AutoCloseable {
         long delay = ClientWebhookOutboxRetryPolicy.delaySeconds(
                 e.attemptCount(), e.maxAttemptsPerCycle());
         boolean updated = tx(session -> store.markRetry(session, e, owner, status, delay, reason));
-        if (updated) LOG.warnf("Outbox retry scheduled: eventId=%s attempt=%d delaySec=%d",
-                e.eventId(), e.attemptCount(), delay);
+        if (updated) {
+            LOG.warnf("Outbox retry scheduled: eventId=%s attempt=%d delaySec=%d",
+                    e.eventId(), e.attemptCount(), delay);
+        } else {
+            LOG.warnf("Outbox retry update rejected (claim ownership changed): eventId=%s attempt=%d",
+                    e.eventId(), e.attemptCount());
+        }
     }
 
     private void markFailed(ClientWebhookOutboxStore.ClaimedEvent e, String owner,
                             Integer status, String reason) {
         boolean updated = tx(session -> store.markFailed(session, e, owner, status, reason));
-        if (updated) LOG.warnf("Outbox event requires review: eventId=%s reason=%s", e.eventId(), reason);
+        if (updated) {
+            LOG.warnf("Outbox event requires review: eventId=%s reason=%s", e.eventId(), reason);
+        } else {
+            LOG.warnf("Outbox FAILED update rejected (claim ownership changed): eventId=%s attempt=%d",
+                    e.eventId(), e.attemptCount());
+        }
     }
 
     @FunctionalInterface
