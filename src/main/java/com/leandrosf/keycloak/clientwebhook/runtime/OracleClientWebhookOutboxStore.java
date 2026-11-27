@@ -113,9 +113,11 @@ public final class OracleClientWebhookOutboxStore implements ClientWebhookOutbox
         return em(session).createNativeQuery("UPDATE " + TABLE + " SET STATUS='DELIVERED',"
                 + "LOCK_OWNER=NULL,LOCK_UNTIL=NULL,DELIVERED_AT=SYSTIMESTAMP,"
                 + "LAST_HTTP_STATUS=:http,LAST_ERROR=NULL,UPDATED_AT=SYSTIMESTAMP "
-                + "WHERE EVENT_ID=:id AND STATUS='PROCESSING' AND LOCK_OWNER=:owner")
+                + "WHERE EVENT_ID=:id AND STATUS='PROCESSING' AND LOCK_OWNER=:owner"
+                + " AND ATTEMPT_COUNT=:attemptCount")
                 .setParameter("http", status).setParameter("id", e.eventId())
-                .setParameter("owner", owner).executeUpdate() == 1;
+                .setParameter("owner", owner).setParameter("attemptCount", e.attemptCount())
+                .executeUpdate() == 1;
     }
 
     @Override
@@ -141,12 +143,14 @@ public final class OracleClientWebhookOutboxStore implements ClientWebhookOutbox
                 + "LAST_HTTP_STATUS=CASE WHEN :http=0 THEN NULL ELSE :http END,"
                 + "LAST_ERROR=:reason,"
                 + "RETRY_CYCLE=RETRY_CYCLE+CASE WHEN :cycle=1 THEN 1 ELSE 0 END "
-                + "WHERE EVENT_ID=:id AND STATUS='PROCESSING' AND LOCK_OWNER=:owner")
+                + "WHERE EVENT_ID=:id AND STATUS='PROCESSING' AND LOCK_OWNER=:owner"
+                + " AND ATTEMPT_COUNT=:attemptCount")
                 .setParameter("status", status).setParameter("delay", delay)
                 .setParameter("http", http == null ? 0 : http)
                 .setParameter("reason", safe)
                 .setParameter("cycle", e.attemptCount() % e.maxAttemptsPerCycle() == 0 ? 1 : 0)
                 .setParameter("id", e.eventId())
-                .setParameter("owner", owner).executeUpdate() == 1;
+                .setParameter("owner", owner).setParameter("attemptCount", e.attemptCount())
+                .executeUpdate() == 1;
     }
 }
