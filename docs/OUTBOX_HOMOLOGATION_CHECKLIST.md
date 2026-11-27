@@ -1,6 +1,6 @@
 # Oracle Outbox — homologation checklist (NOT production instructions)
 
-**Status:** Not executed against a running Keycloak/Oracle environment. The feature is OFF by default. Do not enable on production. Owner approval is required before merge and again before deployment.
+**Status:** One successful administrative delivery observed in homologation on 2026-11-27 (Keycloak 26.8.2 / Oracle 19c / eSegTrab). Failure, rollback, restart, concurrency and uninstall scenarios remain unverified. The feature defaults to OFF; do not enable on production. Owner approval is required before merge and again before deployment.
 
 ## Prerequisites
 
@@ -51,9 +51,21 @@ Execute each scenario and record logs, database evidence, receiver calls and Key
 
 **Do not assume** transaction rollback or the Oracle SQL dialect is correct based only on unit tests. Observe real database state after both the success and rollback paths. Verify that changing an endpoint does not redirect events already queued (destination is snapshotted).
 
+## Homologation evidence — 2026-11-27
+
+**Observed by the environment operator (not reproduced in GitHub CI):**
+
+- Keycloak 26.8.2 started with Outbox ENABLED and without the earlier recurring SQL poll exception, after the Outbox table was provisioned in the database/service used by the Keycloak connection.
+- An intentional test `ROLE_REVOKED` for the eSegTrab client was persisted and dispatched to the configured receiver.
+- The operator confirmed that the receiving application recorded the event and ended the local access.
+- Oracle Outbox row showed `STATUS=DELIVERED`, `ATTEMPT_COUNT=1`, `LAST_HTTP_STATUS=204`, and cleared `LOCK_OWNER` / `LOCK_UNTIL`. Created 09:33:28 and delivered 09:33:31 (local timezone).
+- No user IDs, usernames, internal endpoint URLs, raw JWTs or event IDs have been copied into this public repository.
+
+**Scope:** This validates one successful end-to-end delivery, not atomic rollback, multi-node locking, failure recovery or future Keycloak compatibility. **Do not approve the PR or deploy to production based only on this result.**
+
 ## SQL schema consistency preflight (required before enabling)
 
-The initial table created in homologation may not include all columns currently referenced by the experimental Oracle adapter. **Do not activate the Outbox until this has been checked and the adapter and schema have been reconciled.** A Maven build does not validate SQL table structure.
+The initial table and database service must match the Oracle adapter. In this homologation environment the operator confirmed that all 21 expected columns exist, and one delivery completed. **Every new environment must independently verify schema and database-service alignment before activation.** A Maven build does not validate SQL table structure.
 
 Run these read-only statements against the **same database/service used by the Keycloak datasource**:
 
