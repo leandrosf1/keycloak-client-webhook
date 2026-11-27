@@ -103,6 +103,13 @@ Execute each scenario and record logs, database evidence, receiver calls and Key
 - [ ] Capture a new `ROLE_REVOKED` Outbox row reaching `DELIVERED` after permission restoration (if not already verified).
 - [ ] Test multi-node race/lease recovery, duplicate delivery, other administrative rollback paths, and safe uninstall.
 
+### Updated worker build: post-change regression — operator-reported, 2026-11-27
+
+- The operator installed the new experimental JAR built from commit `b19155f` (Keycloak 26.8.2), which includes the `LOCK_OWNER` + `ATTEMPT_COUNT` fencing improvements.
+- A **single role revocation test succeeded** after installing that updated JAR.
+- This is a positive single-node regression check only. The operator did **not** provide a new Outbox row, attempt count, HTTP status, or end-to-end receiver evidence for this specific post-upgrade test. Do not mark those as separately verified.
+- **Concurrent processing with two active workers remains untested.** The new code should not be treated as cluster-validated based on this regression check.
+
 ## Concurrent-worker lease verification — not yet executed
 
 The 2026-11-27 source review introduced additional `ATTEMPT_COUNT` fencing for `DELIVERED`, `PENDING` and `FAILED` completion, in addition to `LOCK_OWNER`. **GitHub CI tests the shared predicate, but does not demonstrate Oracle transaction isolation or two-node behavior.**
