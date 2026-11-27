@@ -1,6 +1,6 @@
 # Oracle Outbox — homologation checklist (NOT production instructions)
 
-**Status:** Three operator-observed homologation scenarios succeeded on 2026-11-27 (Keycloak 26.8.2 / Oracle 19c / eSegTrab): normal ROLE_REVOKED delivery, receiver-outage retry, and delivery after restarting Keycloak with an event pending. Transaction rollback, multi-node concurrency, insert-failure handling and uninstall scenarios remain unverified. The feature defaults to OFF; do not enable on production. Owner approval is required before merge and again before deployment.
+**Status:** Four operator-observed homologation scenarios succeeded on 2026-11-27 (Keycloak 26.8.2 / Oracle 19c / eSegTrab): normal ROLE_REVOKED delivery, receiver-outage retry, recovery after restarting Keycloak with an event pending, and fail-closed rollback when Outbox INSERT privilege is revoked. Multi-node concurrency, rollback in other administrative paths and uninstall scenarios remain unverified. The feature defaults to OFF; do not enable on production. Owner approval is required before merge and again before deployment.
 
 ## Prerequisites
 
@@ -82,11 +82,25 @@ Execute each scenario and record logs, database evidence, receiver calls and Key
 - This confirms recovery after a full Keycloak restart in this single-node homologation scenario. The event ID was not explicitly compared before and after the restart, so cross-restart ID continuity is inferred from the row progression and should be explicitly verified in another test.
 - No production data, user identifiers, event identifiers, endpoint URLs or JWTs are included in this public log.
 
-**Release note:** Still no evidence for rollback-on-error behavior, cluster concurrency, expired leases, duplicate suppression under races, or safe uninstall. Do not merge or activate in production solely on these successful tests.
+### Outbox INSERT permission failure and role rollback — operator-reported, 2026-11-27
+
+- The operator temporarily revoked the `INSERT` privilege on `KEYCLOAK.KCW_WEBHOOK_OUTBOX` from the Keycloak JDBC user in a controlled homologation test.
+- A monitored client role revocation was attempted through the Keycloak administration interface while the Outbox was enabled.
+- The operation failed in the UI, and the server showed `OutboxPersistenceException: Transactional Outbox insert failed` with underlying Oracle `ORA-01031: insufficient privileges` on the Outbox `INSERT`.
+- The operator checked that the role **remained assigned** to the user and that **no Outbox record was inserted** for this attempt.
+- This is positive evidence of **fail-closed transactional rollback for the tested direct admin-role revocation flow**. It is not evidence that *every* native Keycloak operation or every client integration path has identical rollback behavior.
+- The operator has **not yet confirmed restoration of the INSERT grant nor a subsequent successful post-restoration delivery** in this report. Restore permissions and rerun one successful test before considering the environment restored to baseline.
+- No raw SQL bind values, user identity data or internal infrastructure URLs are included here.
+
+**Risk acknowledged:** This safety policy can block urgent role revocations if Outbox INSERT is unavailable. An operational response/override and reconciliation policy must be agreed before production.
+
+**Release note:** No evidence yet for cross-node concurrency, expired leases, duplicate suppression under races, rollback of other paths, or safe uninstall. Do not merge or activate in production solely on these successful tests.
 
 - [x] Receiver outage (service stopped) → repeated delivery failures with persisted retry cycles → receiver restarted → `DELIVERED` and access ended (operator-observed, 2026-11-27).
 - [x] Restart Keycloak with an outstanding `PENDING` event; operator confirmed the queued event eventually delivered after restarting both Keycloak and the receiver (2026-11-27).
-- [ ] Test rollback, error policy for INSERT failure, multi-node race/lease recovery, duplicate delivery, and safe uninstall.
+- [x] Fail-closed rollback of a monitored role revocation when Outbox INSERT is denied (Oracle ORA-01031, role retained, no Outbox entry; operator-observed, 2026-11-27).
+- [ ] Confirm INSERT privilege restoration and one successful role revocation + DELIVERED after restoration.
+- [ ] Test multi-node race/lease recovery, duplicate delivery, other administrative rollback paths, and safe uninstall.
 
 ## SQL schema consistency preflight (required before enabling)
 
