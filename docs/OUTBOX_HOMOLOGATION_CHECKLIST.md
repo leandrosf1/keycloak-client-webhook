@@ -89,7 +89,7 @@ Execute each scenario and record logs, database evidence, receiver calls and Key
 - The operation failed in the UI, and the server showed `OutboxPersistenceException: Transactional Outbox insert failed` with underlying Oracle `ORA-01031: insufficient privileges` on the Outbox `INSERT`.
 - The operator checked that the role **remained assigned** to the user and that **no Outbox record was inserted** for this attempt.
 - This is positive evidence of **fail-closed transactional rollback for the tested direct admin-role revocation flow**. It is not evidence that *every* native Keycloak operation or every client integration path has identical rollback behavior.
-- The operator has **not yet confirmed restoration of the INSERT grant nor a subsequent successful post-restoration delivery** in this report. Restore permissions and rerun one successful test before considering the environment restored to baseline.
+- **Permission restoration confirmed (operator report, 2026-11-27):** after restoring `GRANT INSERT` for the Keycloak database user, the operator confirmed that normal operation resumed. A separate post-restoration Outbox row showing `DELIVERED` was not supplied; do not claim a fresh end-to-end delivery was independently evidenced.
 - No raw SQL bind values, user identity data or internal infrastructure URLs are included here.
 
 **Risk acknowledged:** This safety policy can block urgent role revocations if Outbox INSERT is unavailable. An operational response/override and reconciliation policy must be agreed before production.
@@ -99,7 +99,8 @@ Execute each scenario and record logs, database evidence, receiver calls and Key
 - [x] Receiver outage (service stopped) → repeated delivery failures with persisted retry cycles → receiver restarted → `DELIVERED` and access ended (operator-observed, 2026-11-27).
 - [x] Restart Keycloak with an outstanding `PENDING` event; operator confirmed the queued event eventually delivered after restarting both Keycloak and the receiver (2026-11-27).
 - [x] Fail-closed rollback of a monitored role revocation when Outbox INSERT is denied (Oracle ORA-01031, role retained, no Outbox entry; operator-observed, 2026-11-27).
-- [ ] Confirm INSERT privilege restoration and one successful role revocation + DELIVERED after restoration.
+- [x] Restore Outbox INSERT privilege; operator confirmed normal operation resumed (2026-11-27).
+- [ ] Capture a new `ROLE_REVOKED` Outbox row reaching `DELIVERED` after permission restoration (if not already verified).
 - [ ] Test multi-node race/lease recovery, duplicate delivery, other administrative rollback paths, and safe uninstall.
 
 ## SQL schema consistency preflight (required before enabling)
