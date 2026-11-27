@@ -1,6 +1,6 @@
 # Oracle Outbox — homologation checklist (NOT production instructions)
 
-**Status:** One successful administrative delivery observed in homologation on 2026-11-27 (Keycloak 26.8.2 / Oracle 19c / eSegTrab). Failure, rollback, restart, concurrency and uninstall scenarios remain unverified. The feature defaults to OFF; do not enable on production. Owner approval is required before merge and again before deployment.
+**Status:** Two operator-observed homologation scenarios succeeded on 2026-11-27 (Keycloak 26.8.2 / Oracle 19c / eSegTrab): normal ROLE_REVOKED delivery and durable retry after the receiver was stopped and restarted. Transaction rollback, Keycloak restart, concurrency, permissions-failure and uninstall scenarios remain unverified. The feature defaults to OFF; do not enable on production. Owner approval is required before merge and again before deployment.
 
 ## Prerequisites
 
@@ -61,7 +61,20 @@ Execute each scenario and record logs, database evidence, receiver calls and Key
 - Oracle Outbox row showed `STATUS=DELIVERED`, `ATTEMPT_COUNT=1`, `LAST_HTTP_STATUS=204`, and cleared `LOCK_OWNER` / `LOCK_UNTIL`. Created 09:33:28 and delivered 09:33:31 (local timezone).
 - No user IDs, usernames, internal endpoint URLs, raw JWTs or event IDs have been copied into this public repository.
 
-**Scope:** This validates one successful end-to-end delivery, not atomic rollback, multi-node locking, failure recovery or future Keycloak compatibility. **Do not approve the PR or deploy to production based only on this result.**
+### Receiver outage and recovery — operator-reported, 2026-11-27
+
+- The operator stopped the eSegTrab service to make the configured webhook endpoint unavailable.
+- A test client role was revoked in Keycloak while the receiver was unavailable. The role revocation committed and an Outbox record was persisted.
+- The operator observed `DELIVERY_EXCEPTION` as the failure reason during delivery attempts and reported **six attempts across two retry cycles** while the service remained unavailable.
+- After restarting eSegTrab, the previously queued event was delivered: the receiving system ended access, recorded the event, and the Outbox record transitioned to `DELIVERED`.
+- No restart of Keycloak was reported as part of this test. The final HTTP status and final ATTEMPT_COUNT were not separately supplied for this outage scenario.
+- In the current Java implementation, `DELIVERY_EXCEPTION` is a `LAST_ERROR` reason; the retryable row's `STATUS` is `PENDING`, then becomes `DELIVERED` on success. This distinction should be verified in the database during future tests.
+
+**Scope:** This demonstrates successful persistent retries and eventual recovery after the *receiver* was offline, as observed in homologation. It does **not** demonstrate recovery after a Keycloak process restart, transaction rollback, multi-node exclusivity, or overall production readiness. **Do not approve the PR or deploy to production based only on these results.**
+
+- [x] Receiver outage (service stopped) → repeated delivery failures with persisted retry cycles → receiver restarted → `DELIVERED` and access ended (operator-observed, 2026-11-27).
+- [ ] Restart Keycloak with an outstanding `PENDING` event; verify the same event is delivered after Keycloak restarts.
+- [ ] Test rollback, error policy for INSERT failure, multi-node race/lease recovery, duplicate delivery, and safe uninstall.
 
 ## SQL schema consistency preflight (required before enabling)
 
