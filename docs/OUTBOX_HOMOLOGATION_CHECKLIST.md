@@ -126,6 +126,17 @@ Perform only with test accounts and an isolated receiver:
 
 Watch for the new warning `ownership changed` and compare it with the receiver's idempotency record. A remotely acknowledged event whose database completion was rejected is **not** proof of data loss; the next worker may redeliver the same event.
 
+### Two-node topology, one successful delivery — operator-reported, 2026-11-27
+
+- Windows and Linux Keycloak 26.8.2 instances were simultaneously running against the same Oracle database and deployed with the same provider version and configuration.
+- With both nodes online, the operator revoked a test role; the receiver ended the affected test profile.
+- The Oracle Outbox row for the event showed `EVENT_TYPE=ROLE_REVOKED`, `STATUS=DELIVERED`, `ATTEMPT_COUNT=1`, `RETRY_CYCLE=0`, `LAST_HTTP_STATUS=204`, and cleared `LOCK_OWNER` and `LOCK_UNTIL`.
+- The event was created at 14:00:50 and marked delivered at 14:00:53 (local time, 2026-11-27).
+- Operator attributed this successful processing to the Windows node. No Linux-side claim/delivery for this specific event has been shown.
+- This confirms normal delivery *with two nodes present*, but it **does not demonstrate an actual simultaneous claim race**, failover to the Linux worker, stale-worker acknowledgement rejection or receiver idempotency under duplicate calls.
+
+**Next controlled evidence:** Create a test event while the recipient is unavailable, confirm `PENDING`, stop Windows Keycloak (without touching native database tables), bring the test recipient back, and observe the Linux Keycloak worker claim and deliver the *same* `EVENT_ID` as it becomes due. Run only in isolated homologation and keep the Windows node down until `DELIVERED` is confirmed. This tests cross-node recovery rather than a simultaneous race.
+
 ## SQL schema consistency preflight (required before enabling)
 
 The initial table and database service must match the Oracle adapter. In this homologation environment the operator confirmed that all 21 expected columns exist, and one delivery completed. **Every new environment must independently verify schema and database-service alignment before activation.** A Maven build does not validate SQL table structure.
