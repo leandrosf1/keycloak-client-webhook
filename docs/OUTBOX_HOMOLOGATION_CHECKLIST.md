@@ -103,6 +103,22 @@ Execute each scenario and record logs, database evidence, receiver calls and Key
 - [ ] Capture a new `ROLE_REVOKED` Outbox row reaching `DELIVERED` after permission restoration (if not already verified).
 - [ ] Test multi-node race/lease recovery, duplicate delivery, other administrative rollback paths, and safe uninstall.
 
+## Concurrent-worker lease verification — not yet executed
+
+The 2026-11-27 source review introduced additional `ATTEMPT_COUNT` fencing for `DELIVERED`, `PENDING` and `FAILED` completion, in addition to `LOCK_OWNER`. **GitHub CI tests the shared predicate, but does not demonstrate Oracle transaction isolation or two-node behavior.**
+
+Perform only with test accounts and an isolated receiver:
+
+1. Use two running Keycloak instances connected to the same test Oracle schema, with `outbox-enabled=true` on both. Verify both started a worker; do not assume a JGroups cluster implies two active Outbox consumers.
+2. Configure a test webhook to return `503`, then revoke one test role. Confirm only one Outbox row is created for this single subscriber, with a stable `EVENT_ID`.
+3. When both workers attempt to acquire due events, verify each attempt increments `ATTEMPT_COUNT` only once and that the receiver never sees **concurrent independent side effects** for the same ID (requests can still be repeated sequentially; receiver idempotency is mandatory).
+4. To exercise lease expiry, deliberately stop/kill the owning Keycloak process while a test event is `PROCESSING`. Wait until `LOCK_UNTIL` has passed and confirm that a surviving worker reclaims the same row, increases `ATTEMPT_COUNT`, and eventually reaches `DELIVERED` after the receiver recovers.
+5. In a controlled fault-injection test, pause the original worker *without* ending its process, allow another worker to reclaim after lease expiry, then resume the original worker. Its old acknowledgement must affect **zero rows**; it must not overwrite the new owner's row state. The receiver may receive a duplicate HTTP call and must deduplicate by event ID.
+6. Verify the final row has `STATUS=DELIVERED`, `LOCK_OWNER=NULL`, `LOCK_UNTIL=NULL`, and exactly one local business effect at the receiver.
+7. Do not modify `LOCK_OWNER`, `LOCK_UNTIL`, `ATTEMPT_COUNT` or other state manually in a shared environment. Record a test-specific fault-injection method before starting lease-expiry testing.
+
+Watch for the new warning `ownership changed` and compare it with the receiver's idempotency record. A remotely acknowledged event whose database completion was rejected is **not** proof of data loss; the next worker may redeliver the same event.
+
 ## SQL schema consistency preflight (required before enabling)
 
 The initial table and database service must match the Oracle adapter. In this homologation environment the operator confirmed that all 21 expected columns exist, and one delivery completed. **Every new environment must independently verify schema and database-service alignment before activation.** A Maven build does not validate SQL table structure.
