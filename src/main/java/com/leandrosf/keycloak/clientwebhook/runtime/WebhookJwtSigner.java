@@ -23,8 +23,20 @@ public final class WebhookJwtSigner {
     }
 
     public static String sign(KeycloakSession session, RealmModel realm, ClientWebhookPayload event) {
+        return signWithIssuer(session, realm, event, issuer(session, realm));
+    }
+
+    /** Capture issuer inside the original request; worker sessions have no frontend request URI. */
+    public static String issuer(KeycloakSession session, RealmModel realm) {
+        return Urls.realmIssuer(session.getContext().getUri(UrlType.FRONTEND).getBaseUri(), realm.getName());
+    }
+
+    /** Fresh five-minute JWT signed by the current realm key for each Outbox attempt. */
+    public static String signWithIssuer(KeycloakSession session, RealmModel realm,
+                                        ClientWebhookPayload event, String issuer) {
         Objects.requireNonNull(session, "session");
         Objects.requireNonNull(realm, "realm");
+        if (issuer == null || issuer.isBlank()) throw new IllegalArgumentException("Missing issuer");
 
         // The active signing key is resolved using the realm on the Keycloak session.
         // Never risk using a key from a different realm.
@@ -33,8 +45,6 @@ public final class WebhookJwtSigner {
             throw new IllegalStateException("JWT signing context does not match event realm");
         }
 
-        String issuer = Urls.realmIssuer(
-                session.getContext().getUri(UrlType.FRONTEND).getBaseUri(), realm.getName());
         SignatureProvider provider = session.getProvider(SignatureProvider.class, ALGORITHM);
         if (provider == null || !provider.isAsymmetricAlgorithm()) {
             throw new IllegalStateException("RS256 realm signing provider is unavailable");
