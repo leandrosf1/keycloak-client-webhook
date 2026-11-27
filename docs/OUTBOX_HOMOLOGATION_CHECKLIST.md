@@ -1,6 +1,6 @@
 # Oracle Outbox — homologation checklist (NOT production instructions)
 
-**Status:** Two operator-observed homologation scenarios succeeded on 2026-11-27 (Keycloak 26.8.2 / Oracle 19c / eSegTrab): normal ROLE_REVOKED delivery and durable retry after the receiver was stopped and restarted. Transaction rollback, Keycloak restart, concurrency, permissions-failure and uninstall scenarios remain unverified. The feature defaults to OFF; do not enable on production. Owner approval is required before merge and again before deployment.
+**Status:** Three operator-observed homologation scenarios succeeded on 2026-11-27 (Keycloak 26.8.2 / Oracle 19c / eSegTrab): normal ROLE_REVOKED delivery, receiver-outage retry, and delivery after restarting Keycloak with an event pending. Transaction rollback, multi-node concurrency, insert-failure handling and uninstall scenarios remain unverified. The feature defaults to OFF; do not enable on production. Owner approval is required before merge and again before deployment.
 
 ## Prerequisites
 
@@ -70,10 +70,22 @@ Execute each scenario and record logs, database evidence, receiver calls and Key
 - No restart of Keycloak was reported as part of this test. The final HTTP status and final ATTEMPT_COUNT were not separately supplied for this outage scenario.
 - In the current Java implementation, `DELIVERY_EXCEPTION` is a `LAST_ERROR` reason; the retryable row's `STATUS` is `PENDING`, then becomes `DELIVERED` on success. This distinction should be verified in the database during future tests.
 
-**Scope:** This demonstrates successful persistent retries and eventual recovery after the *receiver* was offline, as observed in homologation. It does **not** demonstrate recovery after a Keycloak process restart, transaction rollback, multi-node exclusivity, or overall production readiness. **Do not approve the PR or deploy to production based only on these results.**
+**Scope:** This demonstrates successful persistent retries and eventual recovery after the *receiver* was offline, as observed in homologation. The separate Keycloak restart test below covers process restart, but **neither scenario** establishes transaction rollback, multi-node exclusivity or production readiness.
+
+### Keycloak restart with pending event — operator-reported, 2026-11-27
+
+- The operator stopped the eSegTrab service and revoked a test role in Keycloak.
+- The row was persisted in the Oracle Outbox and remained `PENDING` because the receiver was unavailable.
+- The Keycloak server was stopped, left offline for a period, and then started again with the Outbox enabled.
+- After restarting, the worker attempted delivery; the record remained pending with `LAST_ERROR=DELIVERY_EXCEPTION` while the receiver was still unavailable.
+- The operator restarted eSegTrab. Once `NEXT_ATTEMPT_AT` was reached, the pending event was delivered; the receiving system ended the user's local access and recorded the event, and the Outbox changed to `DELIVERED`.
+- This confirms recovery after a full Keycloak restart in this single-node homologation scenario. The event ID was not explicitly compared before and after the restart, so cross-restart ID continuity is inferred from the row progression and should be explicitly verified in another test.
+- No production data, user identifiers, event identifiers, endpoint URLs or JWTs are included in this public log.
+
+**Release note:** Still no evidence for rollback-on-error behavior, cluster concurrency, expired leases, duplicate suppression under races, or safe uninstall. Do not merge or activate in production solely on these successful tests.
 
 - [x] Receiver outage (service stopped) → repeated delivery failures with persisted retry cycles → receiver restarted → `DELIVERED` and access ended (operator-observed, 2026-11-27).
-- [ ] Restart Keycloak with an outstanding `PENDING` event; verify the same event is delivered after Keycloak restarts.
+- [x] Restart Keycloak with an outstanding `PENDING` event; operator confirmed the queued event eventually delivered after restarting both Keycloak and the receiver (2026-11-27).
 - [ ] Test rollback, error policy for INSERT failure, multi-node race/lease recovery, duplicate delivery, and safe uninstall.
 
 ## SQL schema consistency preflight (required before enabling)
